@@ -1,0 +1,45 @@
+"use client";
+
+import localforage from "localforage";
+import { nanoid } from "nanoid";
+
+export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string };
+
+const store = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
+const objectUrls = new Map<string, string>();
+
+export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
+    const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
+    const storageKey = `${prefix}:${nanoid()}`;
+    await store.setItem(storageKey, blob);
+    const url = URL.createObjectURL(blob);
+    objectUrls.set(storageKey, url);
+    return { url, storageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream" };
+}
+
+export async function resolveMediaUrl(storageKey?: string, fallback = "") {
+    if (!storageKey) return fallback;
+    const cached = objectUrls.get(storageKey);
+    if (cached) return cached;
+    const blob = await store.getItem<Blob>(storageKey);
+    if (!blob) return fallback;
+    const url = URL.createObjectURL(blob);
+    objectUrls.set(storageKey, url);
+    return url;
+}
+
+export async function cleanupUnusedMedia(usedData: unknown) {
+    const usedKeys = collectMediaStorageKeys(usedData);
+    const unused: string[] = [];
+    await store.iterate((_value, key) => {
+        if (!usedKeys.has(key)) unused.push(key);
+    });
+    await Promise.all(unused.map((key) => store.removeItem(key)));
+}
+
+export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()) {
+    if (!value || typeof value !== "object") return keys;
+    if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey.includes(":")) keys.add(value.storageKey);
+    Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectMediaStorageKeys(child, keys)) : collectMediaStorageKeys(item, keys)));
+    return keys;
+}

@@ -26,6 +26,7 @@ const kindOptions = [
     { label: "全部", value: "all" },
     { label: "文本", value: "text" },
     { label: "图片", value: "image" },
+    { label: "视频", value: "video" },
 ];
 
 export default function AssetsPage() {
@@ -52,7 +53,7 @@ export default function AssetsPage() {
     const title = Form.useWatch("title", form) || "";
     const tags = Form.useWatch("tags", form) || [];
     const content = Form.useWatch("content", form) || "";
-    const validAssets = useMemo(() => assets.filter((asset) => asset.kind === "text" || asset.kind === "image"), [assets]);
+    const validAssets = useMemo(() => assets.filter((asset) => asset.kind === "text" || asset.kind === "image" || asset.kind === "video"), [assets]);
 
     const filteredAssets = useMemo(() => {
         const query = keyword.trim().toLowerCase();
@@ -145,9 +146,9 @@ export default function AssetsPage() {
     };
 
     const downloadImage = (asset: Asset) => {
-        if (asset.kind !== "image") return;
+        if (asset.kind !== "image" && asset.kind !== "video") return;
         const link = document.createElement("a");
-        link.href = asset.data.dataUrl;
+        link.href = asset.kind === "video" ? asset.data.url : asset.data.dataUrl;
         link.download = `${asset.title || "asset"}.${asset.data.mimeType.split("/")[1] || "png"}`;
         link.click();
     };
@@ -385,7 +386,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                                 {asset.source || "未标注来源"}
                             </Typography.Text>
                         </div>
-                        <Tag className="m-0 shrink-0 text-[11px]">{asset.kind === "image" ? "图片" : "文本"}</Tag>
+                        <Tag className="m-0 shrink-0 text-[11px]">{asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : "文本"}</Tag>
                     </div>
                     <Typography.Paragraph type="secondary" ellipsis={{ rows: 3 }} className="!mb-0 !mt-2 !text-xs !leading-5">
                         {summary}
@@ -404,15 +405,17 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                 <Button size="small" onClick={onOpen}>
                     查看
                 </Button>
-                <Button size="small" icon={<PencilLine className="size-3.5" />} onClick={onEdit}>
-                    编辑
-                </Button>
+                {asset.kind !== "video" ? (
+                    <Button size="small" icon={<PencilLine className="size-3.5" />} onClick={onEdit}>
+                        编辑
+                    </Button>
+                ) : null}
                 {asset.kind === "text" ? (
                     <Button size="small" icon={<Copy className="size-3.5" />} onClick={() => void onCopy(asset)}>
                         复制
                     </Button>
                 ) : null}
-                {asset.kind === "image" ? (
+                {asset.kind === "image" || asset.kind === "video" ? (
                     <Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(asset)}>
                         下载
                     </Button>
@@ -441,7 +444,7 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                             {asset.title}
                         </Typography.Title>
                         <Space size={[4, 4]} wrap>
-                            <Tag>{asset.kind === "image" ? "图片" : "文本"}</Tag>
+                            <Tag>{asset.kind === "image" ? "图片" : asset.kind === "video" ? "视频" : "文本"}</Tag>
                             {(asset.tags || []).map((tag) => (
                                 <Tag key={tag}>{tag}</Tag>
                             ))}
@@ -453,6 +456,8 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                         </Typography.Text>
                         {asset.kind === "text" ? (
                             <Typography.Paragraph className="mt-2 whitespace-pre-wrap">{asset.data.content}</Typography.Paragraph>
+                        ) : asset.kind === "video" ? (
+                            <video src={asset.data.url} controls className="mt-2 aspect-video w-full rounded-lg bg-black" />
                         ) : (
                             <Typography.Text className="mt-2 block">
                                 {asset.data.width}x{asset.data.height} · {formatBytes(asset.data.bytes)} · {asset.data.mimeType}
@@ -471,9 +476,9 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                                 复制文本
                             </Button>
                         ) : null}
-                        {asset.kind === "image" ? (
+                        {asset.kind === "image" || asset.kind === "video" ? (
                             <Button type="primary" icon={<Download className="size-4" />} onClick={() => onDownload(asset)}>
-                                下载图片
+                                {asset.kind === "video" ? "下载视频" : "下载图片"}
                             </Button>
                         ) : null}
                     </Space>

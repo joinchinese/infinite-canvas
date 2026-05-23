@@ -11,7 +11,7 @@ export type NodeGenerationContext = {
 
 export type NodeGenerationInput = {
     nodeId: string;
-    type: "text" | "image";
+    type: "text" | "image" | "video";
     title: string;
     text?: string;
     image?: ReferenceImage;

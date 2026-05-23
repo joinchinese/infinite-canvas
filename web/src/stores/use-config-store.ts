@@ -13,6 +13,7 @@ export type AiConfig = {
     apiKey: string;
     model: string;
     imageModel: string;
+    videoModel: string;
     textModel: string;
     systemPrompt: string;
     models: string[];
@@ -29,6 +30,7 @@ export const defaultConfig: AiConfig = {
     apiKey: "",
     model: "gpt-image-2",
     imageModel: "gpt-image-2",
+    videoModel: "sora-2",
     textModel: "gpt-5.5",
     systemPrompt: "",
     models: [],
@@ -61,6 +63,7 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         models,
         model: models.includes(config.model) ? config.model : modelChannel.defaultModel,
         imageModel: models.includes(config.imageModel) ? config.imageModel : modelChannel.defaultImageModel || modelChannel.defaultModel,
+        videoModel: models.includes(config.videoModel) ? config.videoModel : "sora-2",
         textModel: models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || modelChannel.defaultModel,
         systemPrompt: modelChannel.systemPrompt,
     };
@@ -104,7 +107,7 @@ export const useConfigStore = create<ConfigStore>()(
             partialize: (state) => ({ config: state.config }),
             merge: (persisted, current) => {
                 const config = { ...defaultConfig, ...((persisted as Partial<ConfigStore>).config || {}) };
-                return { ...current, config: { ...config, channelMode: config.channelMode || "remote", imageModel: config.imageModel || config.model, textModel: config.textModel || config.model } };
+                return { ...current, config: { ...config, channelMode: config.channelMode || "remote", imageModel: config.imageModel || config.model, videoModel: config.videoModel || "sora-2", textModel: config.textModel || config.model } };
             },
         },
     ),

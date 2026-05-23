@@ -25,6 +25,38 @@ func AIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/chat/completions")
 }
 
+func AIVideos(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/videos")
+}
+
+func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
+	proxyAIGetRequest(w, r, "/videos/"+id)
+}
+
+func AIVideoContent(w http.ResponseWriter, r *http.Request, id string) {
+	proxyAIGetRequest(w, r, "/videos/"+id+"/content")
+}
+
+func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
+	modelName := r.URL.Query().Get("model")
+	if strings.TrimSpace(modelName) == "" {
+		modelName = "sora-2"
+	}
+	channel, err := service.SelectModelChannel(modelName)
+	if err != nil {
+		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	request, err := http.NewRequest(http.MethodGet, service.BuildModelChannelURL(channel, path), nil)
+	if err != nil {
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	copyAIResponse(w, request)
+}
+
 func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	body, contentType, modelName, err := readAIRequest(r)
 	if err != nil {
@@ -48,6 +80,10 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
+	copyAIResponse(w, request)
+}
+
+func copyAIResponse(w http.ResponseWriter, request *http.Request) {
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		log.Printf("AI proxy request failed: url=%s err=%v", request.URL.String(), err)

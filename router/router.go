@@ -23,6 +23,13 @@ func New() *gin.Engine {
 	api.POST("/v1/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	api.POST("/v1/images/edits", gin.WrapF(handler.AIImagesEdits))
 	api.POST("/v1/chat/completions", gin.WrapF(handler.AIChatCompletions))
+	api.POST("/v1/videos", gin.WrapF(handler.AIVideos))
+	api.GET("/v1/videos/:id", func(c *gin.Context) {
+		handler.AIVideo(c.Writer, c.Request, c.Param("id"))
+	})
+	api.GET("/v1/videos/:id/content", func(c *gin.Context) {
+		handler.AIVideoContent(c.Writer, c.Request, c.Param("id"))
+	})
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))

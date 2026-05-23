@@ -92,5 +92,6 @@ function resolveModelIcon(model: string) {
     if (name.includes("claude") || name.includes("anthropic")) return "/icons/claude.svg";
     if (name.includes("gemini") || name.includes("google")) return "/icons/gemini.svg";
     if (name.includes("gpt") || name.includes("openai")) return "/icons/openai.svg";
+    if (name.includes("grok") || name.includes("grok")) return "/icons/grok.svg";
     return "";
 }
