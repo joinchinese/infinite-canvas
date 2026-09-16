@@ -21,7 +21,12 @@
 
 ## 本地开发
 
-三条命令，已实测通过（Node 22 + wrangler 4.132）：
+**第 0 步：启用 `wrangler.jsonc` 里的 `d1_databases`。**
+
+仓库里这段默认是**注释掉的**，原因是它需要真实的 `database_id`——
+留着占位符会让 `wrangler deploy` 失败（Cloudflare 会在部署解析绑定时报
+`Couldn't find a D1 DB with the id ...`），进而连带影响线上构建。
+所以提交版保持可部署，启用门禁时再取消注释。
 
 ```bash
 # 1. 本地密钥（该文件已被 .gitignore 忽略）
@@ -37,6 +42,18 @@ npx wrangler dev --port 8787
 `web/dist` 若不存在，wrangler 会拒绝启动（`assets.directory` 校验）。
 可以放一个占位 `web/dist/index.html`，或先跑一次真实构建。
 
+### 配置未完成时的降级行为（已实测）
+
+门禁没有配置完整时，**静态站点完全不受影响**，只有 `/api/*` 报错，且错误信息直接指出缺什么：
+
+| 情况 | `/api/health` | 其他 `/api/*` | 静态站点 |
+|---|---|---|---|
+| `AUTH_SECRET` 未设置 | 200 | 500 `server_not_configured` | 正常 |
+| `AUTH_SECRET` 已设置、D1 未绑定 | 200 | 503 `database_unavailable` | 正常 |
+| 两者都就绪 | 200 | 正常 | 正常 |
+
+`/api/health` 刻意放在密钥校验之前，这样在配置过程中也能用它确认 Worker 已经上线。
+
 跑冒烟测试（需要空库；它会真的写入 D1）：
 
 ```bash
@@ -47,7 +64,7 @@ node worker/smoke-test.mjs http://127.0.0.1:8787
 ## 首次部署
 
 ```bash
-# 1. 建 D1，把返回的 database_id 填进 wrangler.jsonc
+# 1. 建 D1，把返回的 database_id 填进 wrangler.jsonc 并取消该段注释
 npx wrangler d1 create infinite-canvas
 
 # 2. 线上建表

@@ -41,8 +41,18 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname.startsWith("/api/")) {
+            const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, "") : url.pathname;
+
+            // 存活探测刻意放在密钥校验之前：AUTH_SECRET 还没配好时，也能用它确认 Worker 已经上线。
+            if (pathname === "/api/health") {
+                return request.method.toUpperCase() === "GET" ? jsonResponse({ ok: true }) : methodNotAllowed("GET");
+            }
+
             const secret = readAuthSecret(env);
             if (!secret) return MISSING_SECRET_RESPONSE();
+            if (!env.DB) {
+                return errorResponse(503, "database_unavailable", "未配置 D1 绑定，请检查 wrangler.jsonc 的 d1_databases。");
+            }
             return handleApi(request, env, url, secret);
         }
 
@@ -61,9 +71,6 @@ async function handleApi(request: Request, env: Env, url: URL, secret: string): 
     // 容忍 `/api/auth/me/` 这类结尾多一个斜杠的写法。
     const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, "") : url.pathname;
 
-    if (pathname === "/api/health") {
-        return method === "GET" ? jsonResponse({ ok: true }) : methodNotAllowed("GET");
-    }
     if (pathname === "/api/auth/setup") {
         return method === "POST" ? handleSetup(request, env, url, secret) : methodNotAllowed("POST");
     }

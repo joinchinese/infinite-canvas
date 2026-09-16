@@ -26,14 +26,23 @@
     "binding": "ASSETS"
   },
 
+  // ---------------------------------------------------------------------------
   // 用户、共享配置与渠道密钥。
-  // 本地 `wrangler dev` 不校验 database_id，但 `wrangler deploy` 会——
-  // 需先执行 `npx wrangler d1 create infinite-canvas` 再把返回的 id 填到这里。
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "infinite-canvas",
-      "database_id": "REPLACE_WITH_REAL_DATABASE_ID"
-    }
-  ]
+  //
+  // ⚠️ 首次启用门禁前必须先做两步，否则部署会失败（database_id 无效）：
+  //    1) npx wrangler d1 create infinite-canvas
+  //       把返回的 database_id 填到下面，然后取消这段注释
+  //    2) npx wrangler d1 execute infinite-canvas --remote --file=./worker/schema.sql
+  //       npx wrangler secret put AUTH_SECRET
+  //
+  // 在取消注释之前，Worker 照常部署，静态站点不受影响；
+  // 只有 /api/* 会返回 500 server_not_configured（/api/health 除外，它始终可用）。
+  // ---------------------------------------------------------------------------
+  // "d1_databases": [
+  //   {
+  //     "binding": "DB",
+  //     "database_name": "infinite-canvas",
+  //     "database_id": "REPLACE_WITH_REAL_DATABASE_ID"
+  //   }
+  // ]
 }
