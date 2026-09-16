@@ -1,0 +1,17 @@
+{
+  // Cloudflare Workers 静态资源托管配置 — infinite-canvas 前端
+  // name 必须与 Cloudflare 面板中的 Worker 项目名称完全一致，否则部署会失败。
+  "name": "infinite-canvas",
+
+  // 与 SPA 路由及静态资源的最佳实践保持一致，设为配置当天日期。
+  "compatibility_date": "2026-09-16",
+
+  "assets": {
+    // 由 `cd web && bun run build` 生成的 Vite 产物目录（相对本文件所在的仓库根）。
+    "directory": "./web/dist",
+
+    // SPA 路由兜底：未命中任何静态文件的导航请求一律返回 /index.html（200）。
+    // 原生支持，因此不需要 web/public/_redirects。
+    "not_found_handling": "single-page-application"
+  }
+}
