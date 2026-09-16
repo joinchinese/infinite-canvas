@@ -46,12 +46,9 @@
 
 ## 本地开发
 
-**第 0 步：启用 `wrangler.jsonc` 里的 `d1_databases`。**
-
-仓库里这段默认是**注释掉的**，原因是它需要真实的 `database_id`——
-留着占位符会让 `wrangler deploy` 失败（Cloudflare 会在部署解析绑定时报
-`Couldn't find a D1 DB with the id ...`），进而连带影响线上构建。
-所以提交版保持可部署，启用门禁时再取消注释。
+`wrangler.jsonc` 里的 `d1_databases` 现在是**常驻启用**的（真实 `database_id` 已填入）。
+这一点不能再随意改回注释：绑定缺失时 `wrangler dev` 拿不到 `env.DB`，
+所有 `/api/*` 会落到 `database_unavailable`。
 
 ```bash
 # 1. 本地密钥（该文件已被 .gitignore 忽略）
@@ -92,8 +89,11 @@ node worker/smoke-test.mjs http://127.0.0.1:8787
 
 ## 首次部署
 
+以下三步已于 2026-09-16 在账户 `430961bc9844a4635e5fb22e33fe42b7` 完成。
+换账号或重建库时按同样顺序重做：
+
 ```bash
-# 1. 建 D1，把返回的 database_id 填进 wrangler.jsonc 并取消该段注释
+# 1. 建 D1，把返回的 database_id 填进 wrangler.jsonc 的 d1_databases
 npx wrangler d1 create infinite-canvas
 
 # 2. 线上建表
@@ -101,6 +101,21 @@ npx wrangler d1 execute infinite-canvas --remote --file=./worker/schema.sql
 
 # 3. 线上密钥（本地 .dev.vars 不会上传，必须单独设置）
 npx wrangler secret put AUTH_SECRET
+```
+
+第 1 步不做就启用绑定，`wrangler deploy` 会在解析绑定时报
+`Couldn't find a D1 DB with the id ...` 而失败——这是线上构建变红最常见的原因。
+
+只有 `CLOUDFLARE_API_TOKEN`（缺 D1 权限）时，第 1、2 步可以改走 HTTP API：
+
+```bash
+# 建库
+curl -X POST "https://api.cloudflare.com/client/v4/accounts/$ACC/d1/database" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --data-binary '{"name":"infinite-canvas"}'
+
+# 建表：POST /accounts/$ACC/d1/database/$UUID/query，body 为 {"sql": "<schema.sql 全文>"}
+# 一次请求可以带多条语句，返回的 result 数组里每项对应一条。
 ```
 
 部署后打开站点，`/api/auth/me` 会返回 `needsSetup: true`，前端会引导创建首位管理员。
@@ -288,4 +303,21 @@ Key 真的注入到了上游。所以 `wrangler dev` 必须是本机的（假上
   请求会被路由到"坏"的那个，表现为各种莫名其妙的超时。
 - **两个测试脚本都要求空库、且不能连着跑**（都从"首次初始化"开始），中间必须清一次库，
   否则第二个脚本会撞 `already_initialized` 并成片 401。
-- **`wrangler.jsonc` 的 D1 绑定**：本地跑之前要取消注释，**提交前必须改回注释**（见上文）。
+- **`wrangler.jsonc` 的 D1 绑定不要图省事改回注释。** 现在它是常驻启用的，
+  注释掉之后 `wrangler dev` 拿不到 `env.DB`，`/api/*` 会全部落到 `database_unavailable`，
+  本地测试会成片失败（这个坑踩过一次）。
+- **本机网络访问不到 `*.workers.dev` 时，仍然可以验证线上部署。** 用 Cloudflare API
+  下载线上脚本 + 查绑定，而不是靠 HTTP 请求：
+
+  ```bash
+  # 线上 Worker 的绑定（应有 env.DB 与 env.ASSETS）
+  curl -s "https://api.cloudflare.com/client/v4/accounts/$ACC/workers/scripts/infinite-canvas/settings" \
+    -H "Authorization: Bearer $TOKEN"
+
+  # 线上脚本内容（确认自己的代码真的部署上去了）
+  curl -s "https://api.cloudflare.com/client/v4/accounts/$ACC/workers/scripts/infinite-canvas/content/v2" \
+    -H "Authorization: Bearer $TOKEN" -o /tmp/live.js
+  grep -o "needsSetup\|channel_secrets\|via-proxy" /tmp/live.js | sort -u
+  ```
+
+  这只能证明"代码与绑定在位"，**不能替代真实请求验证**。要真正跑通还得有可达的域名。

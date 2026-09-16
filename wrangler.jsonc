@@ -27,29 +27,25 @@
   },
 
   // ---------------------------------------------------------------------------
-  // 用户、共享配置与渠道密钥。
+  // 用户、共享配置与渠道密钥（门禁已启用）。
   //
-  // ⚠️ 提交版**故意保持注释**：database_id 是占位符时 wrangler deploy 会在解析绑定时
-  //    失败（Couldn't find a D1 DB with the id ...），进而打红线上构建。
-  //    保持注释状态时 Worker 照常部署、静态站点完全不受影响，只有 /api/* 返回
-  //    server_not_configured(500)，前端进入 degraded 状态照常可用。
+  // 这一步是三道坎里最容易踩的：database_id 无效时 wrangler deploy 会在解析绑定阶段
+  // 直接失败（Couldn't find a D1 DB with the id ...），把线上构建打红——所以**必须**
+  // 先 d1 create 拿到真实 id 再启用本段。反过来，绑定缺失时 Worker 照常部署、静态站点
+  // 不受影响，只有 /api/* 返回 server_not_configured(500)，前端进 degraded 照常可用。
   //
-  // 启用门禁时要做三步：
-  //    1) npx wrangler d1 create infinite-canvas
-  //       把返回的 database_id 填到下面，然后取消这段注释
-  //    2) npx wrangler d1 execute infinite-canvas --remote --file=./worker/schema.sql
-  //    3) npx wrangler secret put AUTH_SECRET
+  // 建库与设密钥已完成（2026-09-16）：
+  //    1) ✔ d1 create infinite-canvas → id 见下
+  //    2) ✔ d1 execute --remote --file=./worker/schema.sql（users / app_config / channel_secrets）
+  //    3) ✔ secret put AUTH_SECRET
   //
-  // 本地开发同理需要先取消注释（`wrangler dev` 没有绑定就拿不到 env.DB）。
-  //
-  // 提醒：本地跑测试前取消注释后，改完代码**记得改回注释**再提交，
-  // 否则线上构建会因为这个占位 id 变红。
+  // 换账号或重建库时，上面三步要重来一遍。
   // ---------------------------------------------------------------------------
-  // "d1_databases": [
-  //   {
-  //     "binding": "DB",
-  //     "database_name": "infinite-canvas",
-  //     "database_id": "REPLACE_WITH_REAL_DATABASE_ID"
-  //   }
-  // ]
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "infinite-canvas",
+      "database_id": "989c4426-c843-4eea-b8e4-122523b100fe"
+    }
+  ]
 }
