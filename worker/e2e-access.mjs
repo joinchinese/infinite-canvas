@@ -162,6 +162,13 @@ async function main() {
         const me = await page.evaluate(() => fetch("/api/auth/me").then((response) => response.json()));
         record("服务端确认身份是 admin", me?.user?.role === "admin", JSON.stringify(me?.user));
 
+        // 反向断言：把"配置"收紧成管理员专属时，最容易犯的错是顺手把管理员也一起锁掉。
+        record("管理员顶栏能看到配置入口", (await page.locator('button[title="配置"]').count()) > 0);
+        await page.goto("/config", { waitUntil: "domcontentloaded" });
+        await page.waitForSelector("header", { timeout: 30000 });
+        record("管理员能直接打开 /config（没有被守卫弹走）", new URL(page.url()).pathname === "/config", page.url());
+        record("管理员看到的是真实的配置界面", (await page.getByText("配置与用户偏好").count()) > 0);
+
         // ---------------------------------------------------------------
         console.log("\n【3】通过界面新增一个普通用户");
         // ---------------------------------------------------------------
@@ -302,28 +309,55 @@ async function main() {
         record("代理被强制开启", memberConfig.proxyEnabled === true, String(memberConfig.proxyEnabled));
         record("proxyUrl 被强制指向本站（而不是管理员本机的 127.0.0.1:23210）", memberConfig.proxyUrl === BASE_URL, String(memberConfig.proxyUrl));
         record("模型选项已重建", Array.isArray(memberConfig.models) && memberConfig.models.includes("ch-e2e::gpt-image-2"), JSON.stringify(memberConfig.models));
+        // 自检：下面几条"找不到真实 Key"的判据都是把整个 localStorage 序列化成字符串再搜。
+        // 先确认这个序列化确实读到了东西——万一它读空（比如浏览器哪天把 Storage 的命名属性
+        // 变成不可枚举），那些断言就会永远成立，安全测试变成纸糊的。
+        // 已实测：Chrome 里 `JSON.stringify(localStorage)` 会输出全部键值，不是 "{}"。
+        const memberStorageDump = await page.evaluate(() => JSON.stringify(localStorage));
+        record(
+            "自检：localStorage 扫描确实读到了内容（后面几条 Key 断言的前提）",
+            memberStorageDump.includes(CONFIG_STORE_KEY) && memberStorageDump.includes("e2e-system-prompt"),
+            `序列化长度 ${memberStorageDump.length}`,
+        );
         record(
             "普通用户的整个 localStorage 里都找不到真实 Key",
-            !(await page.evaluate(() => JSON.stringify(localStorage))).includes(REAL_KEY),
+            !memberStorageDump.includes(REAL_KEY),
         );
         if (!LIVE_MODE) {
             record(
                 "两个渠道的真 Key 都没有落进普通用户浏览器",
-                !(await page.evaluate(() => JSON.stringify(localStorage))).includes(LIVE_KEY),
+                !memberStorageDump.includes(LIVE_KEY),
             );
         }
         record(
             "普通用户的 localStorage 里也没有 channel_secrets 之类的东西",
-            !(await page.evaluate(() => JSON.stringify(localStorage))).toLowerCase().includes("secret"),
+            !memberStorageDump.toLowerCase().includes("secret"),
         );
 
         // ---------------------------------------------------------------
-        console.log("\n【6】普通用户访问成员管理页被弹回首页");
+        console.log("\n【6】普通用户被挡在管理页与配置页之外");
         // ---------------------------------------------------------------
         await page.goto("/admin/members", { waitUntil: "domcontentloaded" });
         await page.waitForSelector("header", { timeout: 30000 });
-        record("普通用户被重定向回首页", new URL(page.url()).pathname === "/", page.url());
+        record("普通用户访问成员管理页被弹回首页", new URL(page.url()).pathname === "/", page.url());
         record("普通用户看不到成员表", (await page.locator("table").count()) === 0);
+
+        // 配置（"配置与用户偏好"）属于高级设置：入口隐藏，而且直接敲 URL 也进不去。
+        // 旧版本这两条都是漏的——普通用户既看得见顶栏齿轮，也能打开 /config 改渠道和 API Key。
+        record("普通用户顶栏没有配置入口", (await page.locator('button[title="配置"]').count()) === 0);
+        await page.goto("/config", { waitUntil: "domcontentloaded" });
+        await page.waitForSelector("header", { timeout: 30000 });
+        record("普通用户访问 /config 被弹回首页", new URL(page.url()).pathname === "/", page.url());
+        record("普通用户看不到配置界面", (await page.getByText("配置与用户偏好").count()) === 0);
+
+        // `?baseUrl=&apiKey=` 是"把渠道凭据带进本机配置"的用法（扫码 / 分享链接那条路）。
+        // 对普通用户既没有意义（他的配置由管理员下发、真 Key 只在服务端），又会让本地配置
+        // 短暂偏离共享配置，所以整段被跳过：只擦地址栏，不写配置、不弹配置框。
+        await page.goto("/?baseUrl=https://injected.example.com&apiKey=sk-injected-must-be-ignored", { waitUntil: "domcontentloaded" });
+        await page.waitForSelector("header", { timeout: 30000 });
+        record("普通用户带凭据参数访问时地址栏被擦干净", !page.url().includes("apiKey"), page.url());
+        record("普通用户不会被 URL 参数写进渠道", !(await page.evaluate(() => JSON.stringify(localStorage))).includes("injected.example.com"));
+        record("普通用户不会因此被弹出配置界面", (await page.getByText("配置由管理员统一管理").count()) === 0);
 
         // ---------------------------------------------------------------
         // 【7】只在本地模式跑：它依赖"本机假上游"，而线上 Worker 够不到这台机器（见 LIVE_MODE 说明）。

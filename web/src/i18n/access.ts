@@ -75,6 +75,11 @@ const zhCN = {
         confirm: "退出",
         signedOut: "已退出登录",
     },
+    adminOnly: {
+        configTitle: "配置由管理员统一管理",
+        configNotice: "渠道、模型与生成偏好属于高级设置，由管理员统一配置后下发给所有用户。你已经在使用这份配置，无需也无法自行修改；如需调整请联系管理员。",
+        configClose: "知道了",
+    },
     members: {
         nav: "成员管理",
         title: "成员管理",
@@ -206,6 +211,11 @@ const enUS = {
         description: "You will need to enter your username and password again.",
         confirm: "Sign out",
         signedOut: "Signed out",
+    },
+    adminOnly: {
+        configTitle: "Configuration is managed by administrators",
+        configNotice: "Channels, models and generation preferences are advanced settings, configured by an administrator and published to every user. You are already using that configuration and neither need nor are able to change it — contact an administrator if something needs adjusting.",
+        configClose: "Got it",
     },
     members: {
         nav: "Members",

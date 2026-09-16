@@ -12,7 +12,7 @@ import { changeAppLocale, type AppLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useConfigStore } from "@/stores/use-config-store";
-import { signOut, useAccessStore } from "@/stores/use-access-store";
+import { signOut, useAccessStore, useCanOpenConfig } from "@/stores/use-access-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 
 type UserStatusActionsProps = {
@@ -32,6 +32,8 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     // 门禁叠加层：登录用户可能是管理员，需要成员管理入口与退出登录。
     const accessUser = useAccessStore((state) => state.user);
     const isAdmin = accessUser?.role === "admin";
+    // 门禁叠加层：配置属于"高级设置"，普通用户连入口都看不到（`showConfig` 只能再往紧里收）。
+    const canOpenConfig = useCanOpenConfig();
     const canvasTheme = canvasThemes[theme];
     const naturalIconClass = "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-stone-600 transition-colors hover:bg-black/5 hover:text-stone-950 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white [&_svg]:size-4";
     const iconStyle: CSSProperties | undefined = variant === "canvas" ? { color: canvasTheme.node.text } : undefined;
@@ -52,7 +54,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
             <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className={naturalIconClass} style={iconStyle} aria-label={t("topNav.docs")} title={t("topNav.docs")}>
                 <BookOpen className="size-4" />
             </a>
-            {showConfig ? (
+            {showConfig && canOpenConfig ? (
                 <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => openConfigDialog(false)} aria-label={t("navigation.config")} title={t("navigation.config")}>
                     <Settings2 className="size-4" />
                 </button>

@@ -62,6 +62,29 @@ export function useIsAdmin(): boolean {
     return useAccessStore((state) => state.user?.role === "admin");
 }
 
+/**
+ * 是否允许打开「配置与用户偏好」界面（渠道、本地代理、偏好设置、提示词来源、WebDAV、本地存储）。
+ *
+ * 这三个界面里含 API Key、上游地址、系统提示词这类"高级设置"，按需求只对管理员开放，
+ * 普通用户完全看不到入口、也打不开——他的配置由管理员发布后统一下发（见 `shared-config.ts`），
+ * 而且 `applySharedConfig` 是**整体替换**，普通用户就算改了偏好，下次刷新也会被服务端盖回去。
+ *
+ * 规则：
+ * - 管理员 → 可以
+ * - `degraded`（服务端还没配好）→ 可以。这里的取舍与 `AccessGate` 一致：那是"代码已部署、
+ *   D1/AUTH_SECRET 还没配"的窗口期，把正在配置的管理员锁在门外是更糟的结果。
+ *   该状态攻击者无法制造，所以放行不会削弱门禁，后端一配齐这个分支就再也不会走到。
+ * - 其它（普通用户、未登录、启动中、错误）→ 不可以
+ *
+ * 注意这只是**界面层**的开关。真正的门禁在服务端：`PUT /api/config` 与 `/api/admin/*`
+ * 都走 `requireAdmin`，普通用户即使绕过界面也改不动任何东西。
+ */
+export function useCanOpenConfig(): boolean {
+    const status = useAccessStore((state) => state.status);
+    const isAdmin = useIsAdmin();
+    return status === "degraded" || isAdmin;
+}
+
 const DEGRADED_CODES = ["server_not_configured", "database_unavailable"];
 
 function toErrorInfo(error: unknown): { code: string; message: string } {

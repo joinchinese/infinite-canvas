@@ -1,6 +1,6 @@
 import { App, Button, Form, Input, Modal, Progress, Select, Tabs } from "antd";
 import type { TFunction } from "i18next";
-import { Cloud, Download, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
+import { Cloud, Download, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, Upload, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -14,6 +14,7 @@ import { exportAppConfig, importAppConfig } from "@/services/config-file";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
+import { useCanOpenConfig } from "@/stores/use-access-store";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
@@ -342,23 +343,50 @@ export function AppConfigModal() {
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
     const configTab = useConfigStore((state) => state.configTab);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
+    // 门禁叠加层：配置只对管理员开放。这里兜住**所有**打开配置的入口——
+    // 顶栏齿轮、画布顶栏、以及画布节点/插件在"配置缺失"时自动调用 `openConfigDialog` 的那十几处。
+    // 拦在这一层，上游那些调用点一行都不用改；普通用户拿到的是说明而不是空白配置面板。
+    const canOpenConfig = useCanOpenConfig();
     return (
         <Modal
             title={
-                <div>
-                    <div className="text-lg font-semibold">{t("config.title")}</div>
-                    <div className="mt-1 text-xs font-normal text-stone-500">{t("config.modalDescription")}</div>
-                </div>
+                canOpenConfig ? (
+                    <div>
+                        <div className="text-lg font-semibold">{t("config.title")}</div>
+                        <div className="mt-1 text-xs font-normal text-stone-500">{t("config.modalDescription")}</div>
+                    </div>
+                ) : (
+                    <div className="text-lg font-semibold">{t("access.adminOnly.configTitle")}</div>
+                )
             }
             open={isConfigOpen}
-            width={980}
+            width={canOpenConfig ? 980 : 460}
             centered
             onCancel={() => setConfigDialogOpen(false)}
-            styles={{ body: { maxHeight: "72vh", overflowY: "auto", paddingRight: 12 } }}
+            styles={{ body: canOpenConfig ? { maxHeight: "72vh", overflowY: "auto", paddingRight: 12 } : undefined }}
             footer={null}
         >
-            <AppConfigPanel showDoneButton initialTab={configTab} />
+            {canOpenConfig ? <AppConfigPanel showDoneButton initialTab={configTab} /> : <AdminOnlyConfigNotice onClose={() => setConfigDialogOpen(false)} />}
         </Modal>
+    );
+}
+
+/** 普通用户被带到配置入口时看到的说明（正常情况下他连入口都点不到）。 */
+function AdminOnlyConfigNotice({ onClose }: { onClose: () => void }) {
+    const { t } = useTranslation();
+
+    return (
+        <div>
+            <div className="flex items-start gap-3">
+                <ShieldAlert className="mt-0.5 size-5 shrink-0 text-stone-400 dark:text-stone-500" />
+                <p className="text-sm leading-6 text-stone-600 dark:text-stone-300">{t("access.adminOnly.configNotice")}</p>
+            </div>
+            <div className="mt-5 flex justify-end">
+                <Button type="primary" onClick={onClose}>
+                    {t("access.adminOnly.configClose")}
+                </Button>
+            </div>
+        </div>
     );
 }
 
