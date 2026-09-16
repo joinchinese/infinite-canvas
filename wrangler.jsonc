@@ -1,17 +1,39 @@
 {
-  // Cloudflare Workers 静态资源托管配置 — infinite-canvas 前端
+  // Cloudflare Workers 配置 — infinite-canvas
+  // 静态资源（Vite 产物）与 API/代理（worker/）由同一个 Worker 提供服务，因此前后端同源，
+  // 会话直接用 httpOnly Cookie，不需要任何 CORS 配置。
+  //
   // name 必须与 Cloudflare 面板中的 Worker 项目名称完全一致，否则部署会失败。
   "name": "infinite-canvas",
 
-  // 与 SPA 路由及静态资源的最佳实践保持一致，设为配置当天日期。
+  // 决定运行时行为与默认路由策略，不要为了"更新"而随意改。
+  // 2026-09-16 >= 2025-04-01，因此默认启用 assets_navigation_prefers_asset_serving：
+  // 导航请求直接由静态资源响应（深层路由不 404、不消耗 Worker 调用），
+  // 只有页面内的 fetch() 未命中静态资源时才调用 Worker。
   "compatibility_date": "2026-09-16",
+
+  // API、代理与登录门禁的入口
+  "main": "./worker/index.ts",
 
   "assets": {
     // 由 `cd web && bun run build` 生成的 Vite 产物目录（相对本文件所在的仓库根）。
     "directory": "./web/dist",
 
-    // SPA 路由兜底：未命中任何静态文件的导航请求一律返回 /index.html（200）。
-    // 原生支持，因此不需要 web/public/_redirects。
-    "not_found_handling": "single-page-application"
-  }
+    // SPA 路由兜底：未命中静态文件的请求一律返回 /index.html（200），而不是 404。
+    "not_found_handling": "single-page-application",
+
+    // 让 Worker 能通过 env.ASSETS.fetch() 兜底取静态资源。
+    "binding": "ASSETS"
+  },
+
+  // 用户、共享配置与渠道密钥。
+  // 本地 `wrangler dev` 不校验 database_id，但 `wrangler deploy` 会——
+  // 需先执行 `npx wrangler d1 create infinite-canvas` 再把返回的 id 填到这里。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "infinite-canvas",
+      "database_id": "REPLACE_WITH_REAL_DATABASE_ID"
+    }
+  ]
 }

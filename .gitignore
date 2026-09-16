@@ -15,3 +15,7 @@ web/public/plugins
 plugins/canvas/*/dist
 plugins/canvas/*/node_modules
 web/public/plugins
+
+# Cloudflare Workers：本地密钥与本地 D1 状态，绝不入库
+.dev.vars
+.wrangler/
