@@ -1,0 +1,8 @@
+{
+  "name": "infinite-canvas-deploy",
+  "private": true,
+  "description": "Cloudflare Workers Builds 入口。仅供 CI 使用：把面板里的 `bun run build` 转发到 web/ 子目录（安装依赖 + Vite 构建）。命令与仓库 Dockerfile 的 web-build 阶段保持一致。前端真实的依赖与脚本在 web/package.json。",
+  "scripts": {
+    "build": "cd web && bun install && bun run build"
+  }
+}
