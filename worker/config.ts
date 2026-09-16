@@ -30,8 +30,33 @@ import { requireAdmin, requireUser } from "./auth";
 import { errorResponse, jsonResponse, methodNotAllowed, readJsonBody } from "./http";
 import type { D1PreparedStatement, Env } from "./types";
 
-/** 下发与入库时统一使用的 apiKey 占位符。非空是刻意的，见文件头注释。 */
+/** 下发与入库时统一使用的 apiKey 占位符**前缀**。非空是刻意的，见文件头注释。 */
 export const SHARED_API_KEY_PLACEHOLDER = "via-proxy";
+
+/**
+ * 每个渠道的占位符都带上自己的 id：`via-proxy:<channelId>`。
+ *
+ * 代理层据此确定"该注入哪个渠道的真 Key"。不这么做的话，同一 `baseUrl` 下配了两个 Key
+ * 的渠道就无法区分——目标 URL 里没有渠道信息，只能靠地址猜。渠道 id 本来就在下发给
+ * 普通用户的 `channels[].id` 里，所以带出来不算新增泄漏。
+ */
+export function sharedApiKeyPlaceholder(channelId: string): string {
+    const id = channelId.trim();
+    return id ? `${SHARED_API_KEY_PLACEHOLDER}:${id}` : SHARED_API_KEY_PLACEHOLDER;
+}
+
+/** 判断一个 apiKey 值是不是占位符（带 id 或不带 id 都算）。入库时要跳过它，避免把占位符当真 Key 存起来。 */
+export function isSharedApiKeyPlaceholder(value: string): boolean {
+    const text = value.trim();
+    return text === SHARED_API_KEY_PLACEHOLDER || text.startsWith(`${SHARED_API_KEY_PLACEHOLDER}:`);
+}
+
+/** 取出占位符里的渠道 id；裸占位符（没有 id）返回空串。 */
+export function channelIdFromPlaceholder(value: string): string {
+    const text = value.trim();
+    if (!text.startsWith(`${SHARED_API_KEY_PLACEHOLDER}:`)) return "";
+    return text.slice(SHARED_API_KEY_PLACEHOLDER.length + 1).trim();
+}
 
 const SHARED_CONFIG_KEY = "shared";
 /** 配置里可能带用户手写的模型调用脚本，比 `readJsonBody` 默认的 64KB 上限放宽一些。 */
@@ -57,12 +82,13 @@ function channelsOf(raw: unknown): ChannelLike[] {
 
 /** 抹掉一切可能出现真实密钥的字段，换成占位符。 */
 function sanitize(raw: unknown): Record<string, unknown> {
+    const channels = channelsOf(raw);
     return {
         ...(raw as Record<string, unknown>),
         // 顶层 apiKey 是历史字段（渠道化之前的结构），`resolveModelChannel` 在没有任何渠道时
-        // 仍会回退到它，所以同样要抹掉。
-        apiKey: SHARED_API_KEY_PLACEHOLDER,
-        channels: channelsOf(raw).map((channel) => ({ ...channel, apiKey: SHARED_API_KEY_PLACEHOLDER })),
+        // 仍会回退到它，所以同样要抹掉。带上首个渠道的 id，让代理层仍能定位到具体渠道。
+        apiKey: sharedApiKeyPlaceholder(channels[0]?.id ?? ""),
+        channels: channels.map((channel) => ({ ...channel, apiKey: sharedApiKeyPlaceholder(channel.id) })),
     };
 }
 
@@ -126,9 +152,9 @@ async function writeSharedConfig(request: Request, env: Env, actorId: string): P
     const statements = [];
 
     // 真实 Key 落 `channel_secrets`。占位符与空值一律跳过——否则第二次发布时会把
-    // "via-proxy" 当成真 Key 存进去，之后所有请求都会带着这个假 Key 发出去。
+    // "via-proxy"（或 "via-proxy:ch-1"）当成真 Key 存进去，之后所有请求都会带着这个假 Key 发出去。
     for (const channel of channels) {
-        if (!channel.apiKey || channel.apiKey === SHARED_API_KEY_PLACEHOLDER) continue;
+        if (!channel.apiKey || isSharedApiKeyPlaceholder(channel.apiKey)) continue;
         statements.push(
             env.DB.prepare(
                 `INSERT INTO channel_secrets (channel_id, api_key, updated_at) VALUES (?1, ?2, ?3)
@@ -165,4 +191,47 @@ async function writeSharedConfig(request: Request, env: Env, actorId: string): P
         channels: channels.length,
         missingSecrets: channels.map((channel) => channel.id).filter((id) => !withSecret.has(id)),
     });
+}
+
+// ---------------------------------------------------------------------------
+// 供代理层查询（只有 worker/proxy.ts 会用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 读取全部渠道的真实密钥。
+ *
+ * 只给代理层用：**任何 HTTP 接口都不得把它返回出去**。整表读而不是按 id 单查，
+ * 是因为渠道数量只有个位数，一次查询就能覆盖一次请求里的所有注入点
+ * （某些请求同时带 header 与 query 两处占位符）。
+ */
+export async function loadChannelSecrets(env: Env): Promise<Map<string, string>> {
+    const rows = await env.DB.prepare("SELECT channel_id, api_key FROM channel_secrets").all<{ channel_id: string; api_key: string }>();
+    return new Map((rows.results ?? []).map((row) => [row.channel_id, row.api_key]));
+}
+
+/**
+ * `origin` → 渠道 id。
+ *
+ * 只在占位符是**裸** `via-proxy`（没有 id）时用于回退匹配——历史配置、以及顶层
+ * `apiKey` 字段走的就是这条路。同一个 origin 配了多个渠道时保留先出现的那个，
+ * 因为这种配置本身就无法从请求里区分，猜一个不如让它稳定可预期。
+ */
+export async function loadChannelOriginIndex(env: Env): Promise<Map<string, string>> {
+    const row = await env.DB.prepare("SELECT value_json FROM app_config WHERE config_key = ?1")
+        .bind(SHARED_CONFIG_KEY)
+        .first<{ value_json: string }>();
+
+    const stored = row ? (parseJson(row.value_json) as Record<string, unknown> | null) : null;
+    const index = new Map<string, string>();
+    for (const channel of channelsOf(stored)) {
+        const baseUrl = typeof channel.baseUrl === "string" ? channel.baseUrl.trim() : "";
+        if (!baseUrl) continue;
+        try {
+            const origin = new URL(baseUrl).origin;
+            if (!index.has(origin)) index.set(origin, channel.id);
+        } catch {
+            // baseUrl 不是合法地址：跳过，不影响其它渠道。
+        }
+    }
+    return index;
 }

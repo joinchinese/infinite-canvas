@@ -5,9 +5,12 @@
  *
  * ```
  *   /api/*                 → 本文件里的 API 路由
- *   /<完整目标 URL>         → 代理转发（阶段 3）
+ *   /<完整目标 URL>         → 代理转发 + 注入真实 Key（worker/proxy.ts）
  *   其他                    → 兜底交给静态资源（Vite 产物）
  * ```
+ *
+ * `/` 与页面路由解析不出目标地址，因此不会被代理截走；反过来，代理目标一定以
+ * `/http://` 或 `/https://` 开头，也不可能撞上静态资源路径。
  *
  * ## 为什么不需要 run_worker_first
  *
@@ -32,6 +35,7 @@ import { handleLogin, handleLogout, handleMe, handleSetup } from "./auth";
 import { handleConfig } from "./config";
 import { errorResponse, jsonResponse, methodNotAllowed, MISSING_SECRET_RESPONSE, readAuthSecret } from "./http";
 import { handleMembers } from "./members";
+import { handleProxy, readProxyTarget } from "./proxy";
 import type { Env } from "./types";
 
 /** `/api/admin/members`、`/api/admin/members/:id`、`/api/admin/members/:id/password` */
@@ -57,8 +61,11 @@ export default {
             return handleApi(request, env, url, secret);
         }
 
-        // 阶段 3 会在这里接入代理转发（/<完整目标 URL>）。
-        // 在此之前，非 /api 的请求一律交给静态资源。
+        // 代理转发：目标 URL 直接拼在路径上（/<完整目标URL>），见 worker/proxy.ts。
+        // 解析不出目标（返回空串）就说明这不是代理请求，继续走静态资源。
+        const target = readProxyTarget(url);
+        if (target) return handleProxy(request, env, target);
+
         if (!env.ASSETS) return errorResponse(503, "assets_unavailable", "未配置 assets 绑定。");
         // 注意：`env.ASSETS.fetch()` 会带上 not_found_handling 语义，
         // 于是任何未命中静态文件的非导航请求都会拿到 index.html + 200（而不是 404）。

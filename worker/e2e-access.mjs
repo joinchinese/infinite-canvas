@@ -9,6 +9,11 @@
  *   3. 给管理员注入一份"含真实 Key 的渠道配置" → 在「共享配置」页点发布
  *   4. 退出登录 → 用普通用户账号登录 → 检查**本地配置已被共享配置覆盖**，
  *      且整个 localStorage 里找不到真实 Key
+ *   5. 普通用户在浏览器里发一次真实请求 → 经代理转发 → 用假上游确认
+ *      **上游收到的是真 Key、而浏览器里始终没有它**
+ *
+ * 第 5 步是"普通用户能用却拿不到 Key"的最终证明，所以它断言的是**上游实际收到了什么**，
+ * 而不是我们的返回值（返回值"看起来对"不代表请求真的发出去了）。
  *
  * ## 依赖
  *
@@ -28,13 +33,46 @@
  */
 
 import { isAbsolute } from "node:path";
+import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
 const BASE_URL = (process.argv[2] || "http://127.0.0.1:8787").replace(/\/+$/, "");
 const ADMIN = { username: "e2e-admin", password: "admin-Passw0rd!" };
 const MEMBER = { username: "e2e-member", password: "member-Passw0rd!" };
 const REAL_KEY = "sk-e2e-real-key-must-not-reach-member";
+/** 第二个渠道的 Key：它指向本地假上游，用来验证"经代理后上游真的收到了真 Key"。 */
+const LIVE_KEY = "sk-e2e-live-key-injected-by-proxy";
 const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
+
+/**
+ * 假上游：验证代理注入时，断言依据必须是"上游实际收到了什么"，而不是我们自己的返回值。
+ */
+function startUpstream() {
+    return new Promise((resolve) => {
+        const server = createServer((req, res) => {
+            const url = new URL(req.url || "/", "http://upstream");
+            const chunks = [];
+            req.on("data", (chunk) => chunks.push(chunk));
+            req.on("end", () => {
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(
+                    JSON.stringify({
+                        method: req.method,
+                        path: url.pathname,
+                        authorization: req.headers.authorization || "",
+                        cookie: req.headers.cookie || "",
+                        body: Buffer.concat(chunks).toString("utf8"),
+                    }),
+                );
+            });
+        });
+        server.listen(0, "127.0.0.1", () => {
+            // unref：即使中途抛错没走到 close，也不要把进程挂在监听器上。
+            server.unref();
+            resolve({ port: server.address().port, close: () => new Promise((done) => server.close(done)) });
+        });
+    });
+}
 
 const results = [];
 let failures = 0;
@@ -77,7 +115,11 @@ async function main() {
         executablePath: process.env.CHROMIUM_PATH || undefined,
     });
 
+    let upstream = null;
     try {
+        // 假上游：第【4】步会把它作为第二个渠道发布出去，第【7】步用它验证 Key 真的注入到了上游。
+        upstream = await startUpstream();
+
         const context = await browser.newContext({ baseURL: BASE_URL });
         const page = await context.newPage();
         // 未捕获的页面异常先收集起来，流程跑完再断言——中途 record(false) 会把失败数搅乱。
@@ -133,7 +175,7 @@ async function main() {
         // 模拟"管理员在自己浏览器里配好了渠道"：直接写入 persist 用的 localStorage 键，
         // 然后刷新让 zustand 从里面恢复。这样测的仍是真实的读写链路。
         await page.evaluate(
-            ({ key, realKey }) => {
+            ({ key, realKey, liveKey, upstreamPort }) => {
                 localStorage.setItem(
                     key,
                     JSON.stringify({
@@ -149,6 +191,15 @@ async function main() {
                                         name: "E2E Channel",
                                         baseUrl: "https://api.example.com",
                                         apiKey: realKey,
+                                        apiFormat: "openai",
+                                        models: [{ name: "gpt-image-2", capability: "image" }],
+                                    },
+                                    {
+                                        // 指向本地假上游：第【7】步用它验证真 Key 确实注入到了上游请求里。
+                                        id: "ch-live",
+                                        name: "Live Upstream",
+                                        baseUrl: `http://127.0.0.1:${upstreamPort}`,
+                                        apiKey: liveKey,
                                         apiFormat: "openai",
                                         models: [{ name: "gpt-image-2", capability: "image" }],
                                     },
@@ -170,7 +221,7 @@ async function main() {
                     }),
                 );
             },
-            { key: CONFIG_STORE_KEY, realKey: REAL_KEY },
+            { key: CONFIG_STORE_KEY, realKey: REAL_KEY, liveKey: LIVE_KEY, upstreamPort: upstream.port },
         );
         await page.reload({ waitUntil: "domcontentloaded" });
         await page.waitForSelector("header", { timeout: 30000 });
@@ -189,8 +240,8 @@ async function main() {
             await page.waitForTimeout(500);
         }
         record("发布后服务端已存下共享配置", Boolean(sharedSeenByAdmin?.config), sharedSeenByAdmin ? "" : "等待 10s 仍未写入");
-        record("服务端记录的渠道 apiKey 是占位符", sharedSeenByAdmin?.config?.channels?.[0]?.apiKey === "via-proxy");
-        record("服务端保留的渠道数与发布的一致", sharedSeenByAdmin?.config?.channels?.length === 1, String(sharedSeenByAdmin?.config?.channels?.length));
+        record("服务端记录的渠道 apiKey 是占位符（带渠道 id）", sharedSeenByAdmin?.config?.channels?.[0]?.apiKey === "via-proxy:ch-e2e", String(sharedSeenByAdmin?.config?.channels?.[0]?.apiKey));
+        record("服务端保留的渠道数与发布的一致", sharedSeenByAdmin?.config?.channels?.length === 2, String(sharedSeenByAdmin?.config?.channels?.length));
         record("服务端响应里没有真实 Key", !JSON.stringify(sharedSeenByAdmin ?? {}).includes(REAL_KEY));
         record("面板显示了最后发布时间", await page.getByText(/最后发布时间/).isVisible().catch(() => false));
 
@@ -224,13 +275,17 @@ async function main() {
         const memberConfig = JSON.parse(memberStorage).state?.config ?? {};
         record("普通用户的本地配置已换成共享配置（systemPrompt）", memberConfig.systemPrompt === "e2e-system-prompt", String(memberConfig.systemPrompt));
         record("渠道 baseUrl 保持真实上游地址", memberConfig.channels?.[0]?.baseUrl === "https://api.example.com", String(memberConfig.channels?.[0]?.baseUrl));
-        record("渠道 apiKey 是占位符", memberConfig.channels?.[0]?.apiKey === "via-proxy", String(memberConfig.channels?.[0]?.apiKey));
+        record("渠道 apiKey 是占位符（带渠道 id，代理据此定位密钥）", memberConfig.channels?.[0]?.apiKey === "via-proxy:ch-e2e", String(memberConfig.channels?.[0]?.apiKey));
         record("代理被强制开启", memberConfig.proxyEnabled === true, String(memberConfig.proxyEnabled));
         record("proxyUrl 被强制指向本站（而不是管理员本机的 127.0.0.1:23210）", memberConfig.proxyUrl === BASE_URL, String(memberConfig.proxyUrl));
         record("模型选项已重建", Array.isArray(memberConfig.models) && memberConfig.models.includes("ch-e2e::gpt-image-2"), JSON.stringify(memberConfig.models));
         record(
             "普通用户的整个 localStorage 里都找不到真实 Key",
             !(await page.evaluate(() => JSON.stringify(localStorage))).includes(REAL_KEY),
+        );
+        record(
+            "两个渠道的真 Key 都没有落进普通用户浏览器",
+            !(await page.evaluate(() => JSON.stringify(localStorage))).includes(LIVE_KEY),
         );
         record(
             "普通用户的 localStorage 里也没有 channel_secrets 之类的东西",
@@ -245,8 +300,39 @@ async function main() {
         record("普通用户被重定向回首页", new URL(page.url()).pathname === "/", page.url());
         record("普通用户看不到成员表", (await page.locator("table").count()) === 0);
 
+        // ---------------------------------------------------------------
+        console.log("\n【7】普通用户在浏览器里发请求 → 经代理注入真 Key → 上游收到真 Key");
+        // ---------------------------------------------------------------
+        // 这一段是"普通用户能用却拿不到 Key"的最终证明：请求从**真实浏览器**发出，
+        // 带的是本地配置里那个占位符，而断言看的是**上游实际收到了什么**。
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+        await page.waitForSelector("header", { timeout: 30000 });
+
+        const liveChannel = memberConfig.channels?.find((channel) => channel.id === "ch-live");
+        record("普通用户的配置里有指向真实上游的渠道", Boolean(liveChannel), JSON.stringify(liveChannel?.baseUrl));
+        record("该渠道的 apiKey 是带 id 的占位符", liveChannel?.apiKey === "via-proxy:ch-live", String(liveChannel?.apiKey));
+
+        // 用前端真实拼 URL 的规则（`${proxyUrl}/${完整目标URL}`）构造请求，
+        // 带着本地配置里的占位符发出去——和画布真实发图时走的是同一条路。
+        const proxied = await page.evaluate(
+            async ({ proxyUrl, target, placeholder }) => {
+                const response = await fetch(`${proxyUrl}/${target}`, { headers: { authorization: `Bearer ${placeholder}` } });
+                return { status: response.status, payload: await response.json().catch(() => null) };
+            },
+            { proxyUrl: memberConfig.proxyUrl, target: `${liveChannel.baseUrl}/v1/echo`, placeholder: liveChannel.apiKey },
+        );
+
+        record("浏览器发出的请求经代理返回 200", proxied.status === 200, String(proxied.status));
+        record("上游收到的是真实 Key，而不是普通用户手里的占位符", proxied.payload?.authorization === `Bearer ${LIVE_KEY}`, String(proxied.payload?.authorization));
+        record("上游没有收到站内会话 Cookie", !proxied.payload?.cookie, String(proxied.payload?.cookie));
+        record(
+            "这一趟下来，普通用户浏览器里依然没有真 Key",
+            !(await page.evaluate(() => JSON.stringify(localStorage))).includes(LIVE_KEY),
+        );
+
         record("整个流程中没有出现未捕获的页面异常", pageErrors.length === 0, pageErrors.join(" | "));
     } finally {
+        if (upstream) await upstream.close();
         await browser.close();
     }
 

@@ -10,16 +10,15 @@
 | `index.ts` | 入口与路由分发；未匹配的请求交回静态资源 |
 | `auth.ts` | 会话签发/校验，`/api/auth/*` 四个接口 |
 | `members.ts` | 成员 CRUD（仅管理员） |
-| `config.ts` | 共享配置读写：真实 Key 落 `channel_secrets`，下发时替换为占位符（仅管理员可写） |
+| `config.ts` | 共享配置读写：真实 Key 落 `channel_secrets`，下发时替换为带渠道 id 的占位符（仅管理员可写） |
+| `proxy.ts` | 代理转发 + 真实 Key 注入（`/<完整目标URL>`）；SSE 流式透传 |
 | `password.ts` | 密码派生规则常量与校验值计算 |
 | `crypto.ts` | base64url、HMAC-SHA256、常量时间比较 |
 | `http.ts` | JSON 响应、Cookie、错误响应 |
 | `types.ts` | `Env` 与领域类型（不依赖 `@cloudflare/workers-types`） |
 | `schema.sql` | D1 建表语句 |
-| `smoke-test.mjs` | 接口层端到端测试（108 条断言：鉴权、权限、防自锁、共享配置、路由行为、KDF 一致性） |
+| `smoke-test.mjs` | 接口层端到端测试（131 条断言：鉴权、权限、防自锁、共享配置、**代理与 Key 注入、SSE**、路由行为、KDF 一致性） |
 | `e2e-access.mjs` | 浏览器端到端测试（真实 Chromium 走完整用户路径，见文末） |
-
-`proxy.ts`（代理转发 + Key 注入）属于阶段 3，尚未创建。
 
 ## 前端叠加层在哪
 
@@ -123,6 +122,7 @@ npx wrangler secret put AUTH_SECRET
 | PATCH | `/api/admin/members/:id` | 管理员 | `{displayName?, role?, status?}` |
 | DELETE | `/api/admin/members/:id` | 管理员 | 删除成员 |
 | POST | `/api/admin/members/:id/password` | 管理员 | `{clientVerifier}` 重置密码 |
+| ANY | `/<完整目标URL>` | 登录用户 | 代理转发；命中占位符时注入该渠道的真 Key |
 
 ## 密码方案：为什么派生在浏览器侧
 
@@ -158,7 +158,7 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
 
 ```
    channel_secrets 表  ← 真实 API Key（主键是 channels[].id）
-   app_config 表       ← 其余配置，channels[].apiKey 已换成占位符 "via-proxy"
+   app_config 表       ← 其余配置，channels[].apiKey 已换成占位符 "via-proxy:<channelId>"
 ```
 
 普通用户登录时拉到的配置里：
@@ -166,7 +166,7 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
 | 字段 | 值 | 原因 |
 |---|---|---|
 | `channels[].baseUrl` | **真实上游地址** | 请求会拼成 `${proxyUrl}/${baseUrl}/v1/...`，代理要能从路径里解析目标 |
-| `channels[].apiKey` | `"via-proxy"` | 非空才能通过前端 6 处"Key 不能为空"的校验，让请求真的发出去 |
+| `channels[].apiKey` | `"via-proxy:<channelId>"` | 非空才能通过前端那批"Key 不能为空"的校验；带 id 是为了让代理解析出"该注入哪个渠道的 Key" |
 | `proxyEnabled` / `proxyUrl` | 由**前端**强制设为「本站 origin」 | 管理员本机可能在用 `127.0.0.1:23210` 那个本地代理，对普通用户毫无意义；也只有前端知道用户实际访问的是哪个域名 |
 
 > 早期方案文档里写的"baseUrl 填成代理地址"是错的，会让请求变成 `${proxyUrl}/${proxyUrl}/v1/...`。
@@ -178,9 +178,55 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
 服务端会在响应里带 `missingSecrets: string[]`，列出"配置里有、但库里没存到真实 Key"的渠道 id，
 管理端的共享配置面板据此提示——否则这类渠道在普通用户那里只会表现为生成失败。
 
+## 代理转发：占位符是怎么变成一个真 Key 的
+
+`proxy.ts` 的输入是路径里的完整目标地址（上游 `withLocalProxy()` 拼的 `${proxyUrl}/${目标URL}`）：
+
+```
+   /https://api.openai.com/v1/images/generations
+```
+
+请求本身带的是普通用户手里的占位符（`Authorization: Bearer via-proxy:ch-1`）。
+难点不在转发，而在**"这个请求该用哪个渠道的 Key"**——目标 URL 里没有渠道信息，
+而两个渠道完全可能共用同一个 `baseUrl`（同一家供应商配两个 Key），所以**不能靠地址猜**。
+
+解法是让占位符自带渠道 id（`via-proxy:<channelId>`），代理据此查 `channel_secrets` 后替换。
+渠道 id 本来就在下发给普通用户的 `channels[].id` 里，所以不算新增泄漏。
+
+替换点有**三处**，因为上游对三种格式的写法不同：
+
+| 位置 | 触发场景 |
+|---|---|
+| `Authorization: Bearer <key>` | OpenAI 格式（`image.ts:351`、`audio.ts:18`） |
+| `x-goog-api-key: <key>` | Gemini 格式（`image.ts:374`、`model-plugin.ts:396`） |
+| `?key=<key>` 查询参数 | 部分 Gemini 路径把 Key 放进 URL（`model-plugin.ts:700`） |
+
+裸占位符（`via-proxy`，没有 id，来自历史配置或顶层 `apiKey`）退化为**按目标 origin 匹配渠道**。
+匹配不到就报 502，**绝不"随便挑一个 Key"**——那会让请求带着错误渠道的凭据打过去，
+在用户那边只表现为莫名其妙的 401。
+
+请求里没有占位符时**原样转发**：上游还有别的合法用法会经过这个代理（用户自己填了真 Key 的渠道、
+模型插件里的第三方接口），此时不做任何注入。
+
+### 几个刻意的取舍
+
+- **不转发 Cookie**。站内会话 Cookie 是我们的凭据，绝不能出现在发给供应商的请求里（有断言）。
+- **不加 CORS 头**。请求本来就同源，不需要 `access-control-allow-origin: *`。
+  参考实现 `canvas-proxy/index.js` 加了通配 CORS，那是给跨域用法准备的。
+- **丢弃 `accept-encoding` / `content-length` 等框架头**：`fetch()` 已经重新解码并重新分帧，
+  原框架头不再成立（照 `canvas-proxy` 的做法）。
+- **SSE 不缓冲**：上游 body 直接交给 `Response`，文本流式输出一个 chunk 一个 chunk 到浏览器。
+- **这是一个"登录用户可用的转发器"，不是白名单代理**。任何登录用户都能借它请求任意 http(s) 地址
+  （`model-plugin.ts:43` 允许插件写绝对 URL）。当前规模（管理员 1 人 + 普通用户 2-5 人）可接受，
+  但这是**已知的、刻意保留的**开放面，收紧方案（origin 白名单）留给阶段 4。
+
+`readTarget()` 的写法照搬 `canvas-proxy/index.js:35-47`，它已经处理过两个真实踩到的坑：
+浏览器对路径的转义（`decodeURI`），以及部分客户端把嵌入 URL 里的 `//` 收敛成 `/`
+（实测 `https:/api.openai.com/...` 会出现，必须补回来）。
+
 ## 已验证 / 未验证
 
-**已实测**（`smoke-test.mjs`，108/108 通过；`e2e-access.mjs`，真实 Chromium 27/27 通过）：
+**已实测**（`smoke-test.mjs`，131/131 通过；`e2e-access.mjs`，真实 Chromium 34/34 通过）：
 
 - 初始化引导、登录、登出、会话校验
 - 成员增删改查、角色边界（普通用户一律 403）
@@ -191,16 +237,26 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
   删渠道会清理残留密钥、响应里（以及数据库的 `app_config` 里）都不出现真实 Key
 - **密码派生参数三方一致**：`worker/password.ts` ↔ `web/src/services/api/auth.ts` ↔ 测试脚本，
   用文本解析做字面量比对，单侧改动会让测试失败
+- **代理与 Key 注入**（全部以"假上游实际收到了什么"为判据，不是看我们的返回值）：
+  未登录 401；`Authorization` / `x-goog-api-key` / `?key=` 三处占位符都被替换成真 Key；
+  上游**没有**收到会话 Cookie；POST 请求体完整转发；无占位符时原样转发；
+  渠道不存在或缺密钥时 502 且错误码可区分；上游不可达 502
+- **SSE 流式透传**：三段事件全部送达，且首块在 ~170ms 就到达（总计 ~470ms）——
+  证明是边生成边吐，没有被攒到最后
 - 浏览器端到端：首次初始化 → 建成员 → 发布配置 → 退出 → 普通用户登录 →
-  本地配置被共享配置覆盖、`apiKey` 是占位符、`proxyUrl` 是本站、**整个 localStorage 里没有真实 Key**
+  本地配置被共享配置覆盖、`apiKey` 是占位符、`proxyUrl` 是本站、整个 localStorage 里没有真实 Key
+- **浏览器 → 代理 → 上游 的完整链路**：普通用户在页面里发出的请求经代理返回 200，
+  上游收到的是真 Key，而浏览器里自始至终没有它
 - SPA 路由行为：深层路由刷新返回 200；导航请求不经过 Worker
 
-**未验证**：代理转发与 SSE 流式透传、`/https://...` 路径中 `//` 被规范化的问题
-（阶段 3，需照 `canvas-proxy/index.js` 的 `readTarget()` 处理）。
+**未验证**：10ms CPU 上限在**真实免费版**下的表现（本地 dev 无此限制）。
+`wrangler dev` 里 `/https://...` 路径中 `//` 的规范化已覆盖单斜杠场景，线上行为待部署后确认。
 
-**已知未收紧的口子**（阶段 4）：普通用户仍能看到顶部的配置入口，直接访问 `/config` 也能打开配置页。
-这只影响本地那份会被共享配置覆盖的副本，**拿不到真实 Key、也改不动服务端**，
-但按需求"普通用户看不到配置"来说还没做完。
+**已知未收紧的口子**（阶段 4）：
+1. 普通用户仍能看到顶部的配置入口，直接访问 `/config` 也能打开配置页。
+   这只影响本地那份会被共享配置覆盖的副本，**拿不到真实 Key、也改不动服务端**，
+   但按需求"普通用户看不到配置"来说还没做完。
+2. 代理是"登录用户可用的转发器"，没有 origin 白名单（见上面"刻意的取舍"）。
 
 ## 浏览器端到端测试
 
@@ -217,3 +273,19 @@ node worker/e2e-access.mjs http://127.0.0.1:8787
 | `CHROMIUM_PATH` | `chrome` 可执行文件路径；缺省交给 playwright 自己找 |
 
 在无头环境下它会先探测 `needsSetup`，**库非空时会直接退出并提示先清库**，不会跑出一堆无意义的失败。
+
+它在第【4】步会额外建一个指向**本地假上游**的渠道，第【7】步用真实浏览器发请求去验证
+Key 真的注入到了上游。所以 `wrangler dev` 必须是本机的（假上游监听在 `127.0.0.1`）。
+
+## 排查笔记（踩过的坑）
+
+- **改完前端代码重新构建后，要重启 `wrangler dev`。**
+  它启动时建立资源清单，`web/dist` 重建后清单可能是旧的，表现为
+  **JS/CSS 请求被当成未命中、返回 SPA 外壳（`content-type: text/html`）**，
+  页面白屏、登录页出不来。判断方法：`curl -D - -o /dev/null http://127.0.0.1:8787/assets/<构建出的文件名>`
+  看 `content-type` 是不是 `text/javascript`。
+- **同一端口不要留两个 `wrangler dev` 实例。** Windows 上两个进程可以同时 bind 同一个端口，
+  请求会被路由到"坏"的那个，表现为各种莫名其妙的超时。
+- **两个测试脚本都要求空库、且不能连着跑**（都从"首次初始化"开始），中间必须清一次库，
+  否则第二个脚本会撞 `already_initialized` 并成片 401。
+- **`wrangler.jsonc` 的 D1 绑定**：本地跑之前要取消注释，**提交前必须改回注释**（见上文）。

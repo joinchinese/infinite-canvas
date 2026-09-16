@@ -16,7 +16,10 @@
  * 代理要能从路径里解析出**真实目标地址**，所以：
  *
  * - `channels[].baseUrl` = 真实上游（如 `https://api.openai.com`）**不能改**
- * - `channels[].apiKey` = 占位符，只为通过前端校验，真 Key 由 Worker 注入
+ * - `channels[].apiKey` = 占位符 `via-proxy:<channelId>`，真 Key 由 Worker 注入。
+ *   占位符**非空**才通过前端那批"Key 不能为空"的校验，请求才会真的发出去；
+ *   带上渠道 id 是为了让代理层知道该注入哪个渠道的 Key（同一 baseUrl 可能配多个 Key）。
+ *   前端不需要自己拼这个值——服务端下发什么就用什么。
  * - `proxyEnabled` / `proxyUrl` = 由 `applySharedConfig` 强制改成"本站 origin"
  *
  * 早期文档里写的"baseUrl 填成代理地址"是错的，会让请求变成
@@ -99,10 +102,4 @@ export function applySharedConfig(shared: AiConfig, origin: string = window.loca
     // 注意时序：zustand 的 persist 在 store 创建时（模块加载阶段）就已从 localStorage 恢复完毕，
     // 而这里是启动后的异步拉取，所以这次写入一定晚于恢复、不会被旧值盖回去。
     useConfigStore.setState({ config });
-}
-
-/** 给管理端页预览"把这份配置发布出去后，普通用户会拿到什么"。 */
-export function previewSharedConfig(config: AiConfig, origin: string): AiConfig {
-    const channels = config.channels.map((channel) => ({ ...channel, apiKey: "via-proxy" }));
-    return { ...config, channels, proxyEnabled: true, proxyUrl: origin };
 }
