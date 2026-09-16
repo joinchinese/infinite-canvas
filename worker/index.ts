@@ -29,6 +29,7 @@
  */
 
 import { handleLogin, handleLogout, handleMe, handleSetup } from "./auth";
+import { handleConfig } from "./config";
 import { errorResponse, jsonResponse, methodNotAllowed, MISSING_SECRET_RESPONSE, readAuthSecret } from "./http";
 import { handleMembers } from "./members";
 import type { Env } from "./types";
@@ -82,6 +83,9 @@ async function handleApi(request: Request, env: Env, url: URL, secret: string): 
     }
     if (pathname === "/api/auth/me") {
         return method === "GET" ? handleMe(request, env, secret) : methodNotAllowed("GET");
+    }
+    if (pathname === "/api/config") {
+        return handleConfig(request, env, secret);
     }
 
     const membersMatch = MEMBERS_PATH.exec(pathname);

@@ -28,11 +28,14 @@ export function methodNotAllowed(allowed: string): Response {
     });
 }
 
+/** 请求体默认上限。共享配置接口带了用户手写的模型脚本，单独放宽（见 `worker/config.ts`）。 */
+const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+
 /** 读取请求体里的 JSON；非法 JSON 或超长返回 null（调用方回 400）。 */
-export async function readJsonBody<T>(request: Request): Promise<T | null> {
+export async function readJsonBody<T>(request: Request, maxBytes: number = DEFAULT_MAX_BODY_BYTES): Promise<T | null> {
     try {
         const text = await request.text();
-        if (!text || text.length > 64 * 1024) return null;
+        if (!text || text.length > maxBytes) return null;
         const parsed: unknown = JSON.parse(text);
         return parsed && typeof parsed === "object" ? (parsed as T) : null;
     } catch {

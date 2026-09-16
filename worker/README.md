@@ -10,14 +10,40 @@
 | `index.ts` | 入口与路由分发；未匹配的请求交回静态资源 |
 | `auth.ts` | 会话签发/校验，`/api/auth/*` 四个接口 |
 | `members.ts` | 成员 CRUD（仅管理员） |
+| `config.ts` | 共享配置读写：真实 Key 落 `channel_secrets`，下发时替换为占位符（仅管理员可写） |
 | `password.ts` | 密码派生规则常量与校验值计算 |
 | `crypto.ts` | base64url、HMAC-SHA256、常量时间比较 |
 | `http.ts` | JSON 响应、Cookie、错误响应 |
 | `types.ts` | `Env` 与领域类型（不依赖 `@cloudflare/workers-types`） |
 | `schema.sql` | D1 建表语句 |
-| `smoke-test.mjs` | 端到端冒烟测试（67 条断言，覆盖鉴权、权限、防自锁、路由行为） |
+| `smoke-test.mjs` | 接口层端到端测试（108 条断言：鉴权、权限、防自锁、共享配置、路由行为、KDF 一致性） |
+| `e2e-access.mjs` | 浏览器端到端测试（真实 Chromium 走完整用户路径，见文末） |
 
-`config.ts`（共享配置下发）与 `proxy.ts`（代理转发 + Key 注入）属于后续阶段，尚未创建。
+`proxy.ts`（代理转发 + Key 注入）属于阶段 3，尚未创建。
+
+## 前端叠加层在哪
+
+门禁的前端部分集中在这些**新增文件**里，对上游的改动只有 4 处缝合点：
+
+| 新增文件 | 职责 |
+|---|---|
+| `web/src/services/api/auth.ts` | PBKDF2 派生（必须与 `password.ts` 一致）+ 登录/登出/会话接口 |
+| `web/src/services/api/members.ts` | 成员管理接口客户端 |
+| `web/src/services/api/shared-config.ts` | 共享配置拉取/发布，以及写入本地 store 的适配层 |
+| `web/src/stores/use-access-store.ts` | 登录态、角色、启动流程 |
+| `web/src/components/access/access-gate.tsx` | 全局门禁：登录页 / 应用 / 降级提示 / 错误页 |
+| `web/src/components/access/shared-config-panel.tsx` | 共享配置发布面板 |
+| `web/src/pages/login/index.tsx` | 登录页与首次初始化页 |
+| `web/src/pages/admin/members/index.tsx` | 成员管理页（`/admin/members`） |
+| `web/src/lib/access-error.ts` | 错误码 → 文案 |
+| `web/src/i18n/access.ts` | 门禁文案（独立文件，让上游两个语言包保持零改动） |
+
+| 上游缝合点 | 改动 |
+|---|---|
+| `web/src/components/layout/client-root-init.tsx` | +1 import，`return <>{children}</>` → `return <AccessGate>{children}</AccessGate>` |
+| `web/src/router.tsx` | +1 import，+1 条路由 |
+| `web/src/components/layout/user-status-actions.tsx` | +2 import，+2 个按钮（管理员入口、退出登录） |
+| `web/src/i18n/index.ts` | 合并 `access` 命名空间，2 行 |
 
 ## 本地开发
 
@@ -54,12 +80,16 @@ npx wrangler dev --port 8787
 
 `/api/health` 刻意放在密钥校验之前，这样在配置过程中也能用它确认 Worker 已经上线。
 
-跑冒烟测试（需要空库；它会真的写入 D1）：
+跑冒烟测试（**需要空库**；它会真的写入 D1）：
 
 ```bash
-npx wrangler d1 execute infinite-canvas --local --command "DELETE FROM users;"
+npx wrangler d1 execute infinite-canvas --local --command "DELETE FROM users; DELETE FROM app_config; DELETE FROM channel_secrets;"
 node worker/smoke-test.mjs http://127.0.0.1:8787
 ```
+
+> `e2e-access.mjs`（浏览器端到端）同样要求空库。两者都从"首次初始化"开始跑，
+> 所以**不能连着跑**——中间必须清一次库，否则第二步会撞上 `already_initialized`，
+> 后续断言会成片 401（这是脚本设计使然，不是 bug）。
 
 ## 首次部署
 
@@ -86,6 +116,8 @@ npx wrangler secret put AUTH_SECRET
 | POST | `/api/auth/login` | 公开 | `{username, clientVerifier}` |
 | POST | `/api/auth/logout` | 公开 | 清除 Cookie |
 | GET | `/api/auth/me` | 公开 | 未登录返回 `200 {authenticated:false}`（不是 401，避免启动路径刷控制台报错） |
+| GET | `/api/config` | 登录用户 | 共享配置；`channels[].apiKey` 与顶层 `apiKey` 一律替换为占位符 |
+| PUT | `/api/config` | 管理员 | 发布共享配置 `{config}`；真实 Key 落 `channel_secrets`，**不落 `app_config`** |
 | GET | `/api/admin/members` | 管理员 | 成员列表 |
 | POST | `/api/admin/members` | 管理员 | `{username, displayName?, role?, clientVerifier}` |
 | PATCH | `/api/admin/members/:id` | 管理员 | `{displayName?, role?, status?}` |
@@ -120,16 +152,68 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
 
 自增 `users.auth_version` 即吊销该用户全部已签发会话。
 
+## 共享配置：普通用户为什么能用却拿不到 Key
+
+管理员在「成员管理 → 共享配置」点发布后，服务端存两份东西：
+
+```
+   channel_secrets 表  ← 真实 API Key（主键是 channels[].id）
+   app_config 表       ← 其余配置，channels[].apiKey 已换成占位符 "via-proxy"
+```
+
+普通用户登录时拉到的配置里：
+
+| 字段 | 值 | 原因 |
+|---|---|---|
+| `channels[].baseUrl` | **真实上游地址** | 请求会拼成 `${proxyUrl}/${baseUrl}/v1/...`，代理要能从路径里解析目标 |
+| `channels[].apiKey` | `"via-proxy"` | 非空才能通过前端 6 处"Key 不能为空"的校验，让请求真的发出去 |
+| `proxyEnabled` / `proxyUrl` | 由**前端**强制设为「本站 origin」 | 管理员本机可能在用 `127.0.0.1:23210` 那个本地代理，对普通用户毫无意义；也只有前端知道用户实际访问的是哪个域名 |
+
+> 早期方案文档里写的"baseUrl 填成代理地址"是错的，会让请求变成 `${proxyUrl}/${proxyUrl}/v1/...`。
+> 现在按正确语义实现：`baseUrl` 保持真实上游，`proxyUrl` 指向本站。
+
+**渠道 id 是密钥的关联键**：删掉渠道再新建会换 id，需要重新发布一次；只改名字或地址不受影响。
+删除渠道时其残留密钥会一并清理（`smoke-test.mjs` 里有对应断言）。
+
+服务端会在响应里带 `missingSecrets: string[]`，列出"配置里有、但库里没存到真实 Key"的渠道 id，
+管理端的共享配置面板据此提示——否则这类渠道在普通用户那里只会表现为生成失败。
+
 ## 已验证 / 未验证
 
-**已实测**（`smoke-test.mjs`，67/67 通过）：
+**已实测**（`smoke-test.mjs`，108/108 通过；`e2e-access.mjs`，真实 Chromium 27/27 通过）：
 
 - 初始化引导、登录、登出、会话校验
 - 成员增删改查、角色边界（普通用户一律 403）
 - 防自锁：不能删除自己；至少保留一名启用状态的管理员
 - 改角色 / 重置密码 / 停用 / 删除后，目标用户的旧会话立即失效
 - 错误密码与不存在的用户返回同一错误码（不泄漏账号是否存在）
+- 共享配置：未登录 401、普通用户写入 403、重复发布不会把占位符当成真 Key、
+  删渠道会清理残留密钥、响应里（以及数据库的 `app_config` 里）都不出现真实 Key
+- **密码派生参数三方一致**：`worker/password.ts` ↔ `web/src/services/api/auth.ts` ↔ 测试脚本，
+  用文本解析做字面量比对，单侧改动会让测试失败
+- 浏览器端到端：首次初始化 → 建成员 → 发布配置 → 退出 → 普通用户登录 →
+  本地配置被共享配置覆盖、`apiKey` 是占位符、`proxyUrl` 是本站、**整个 localStorage 里没有真实 Key**
 - SPA 路由行为：深层路由刷新返回 200；导航请求不经过 Worker
 
-**未验证**：共享配置下发、代理转发与 Key 注入（阶段 2/3）、上游 SSE 流式透传、
-`/https://...` 路径中 `//` 被规范化的问题（需照 `canvas-proxy/index.js` 的 `readTarget()` 处理）。
+**未验证**：代理转发与 SSE 流式透传、`/https://...` 路径中 `//` 被规范化的问题
+（阶段 3，需照 `canvas-proxy/index.js` 的 `readTarget()` 处理）。
+
+**已知未收紧的口子**（阶段 4）：普通用户仍能看到顶部的配置入口，直接访问 `/config` 也能打开配置页。
+这只影响本地那份会被共享配置覆盖的副本，**拿不到真实 Key、也改不动服务端**，
+但按需求"普通用户看不到配置"来说还没做完。
+
+## 浏览器端到端测试
+
+```bash
+npx wrangler dev --port 8787      # 另开一个终端
+node worker/e2e-access.mjs http://127.0.0.1:8787
+```
+
+需要 `playwright-core` 与一份 Chromium。两者都不是本仓库的依赖，用环境变量指路：
+
+| 变量 | 用途 |
+|---|---|
+| `PLAYWRIGHT_MODULE` | `playwright-core` 的入口路径或所在目录；缺省按普通模块解析 |
+| `CHROMIUM_PATH` | `chrome` 可执行文件路径；缺省交给 playwright 自己找 |
+
+在无头环境下它会先探测 `needsSetup`，**库非空时会直接退出并提示先清库**，不会跑出一堆无意义的失败。

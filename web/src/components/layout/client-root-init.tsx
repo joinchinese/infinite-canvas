@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { useConfigStore } from "@/stores/use-config-store";
 import { usePromptSourceScheduler } from "@/hooks/use-prompt-source-scheduler";
+import { AccessGate } from "@/components/access/access-gate";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -35,5 +36,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         else message.error(t("config.importedChannelBaseUrlInvalid"));
     }, [importChannelCredentials, message, openConfigDialog, t]);
 
-    return <>{children}</>;
+    // 门禁：未登录时 AccessGate 渲染登录页，已登录才渲染 children。
+    // 放在这里（而不是 router 的路由守卫）是因为本组件已经是包裹全应用的壳，少动一个文件。
+    return <AccessGate>{children}</AccessGate>;
 }

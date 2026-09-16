@@ -29,14 +29,18 @@
   // ---------------------------------------------------------------------------
   // 用户、共享配置与渠道密钥。
   //
-  // ⚠️ 首次启用门禁前必须先做两步，否则部署会失败（database_id 无效）：
+  // ⚠️ 提交版**故意保持注释**：database_id 是占位符时 wrangler deploy 会在解析绑定时
+  //    失败（Couldn't find a D1 DB with the id ...），进而打红线上构建。
+  //    保持注释状态时 Worker 照常部署、静态站点完全不受影响，只有 /api/* 返回
+  //    server_not_configured(500)，前端进入 degraded 状态照常可用。
+  //
+  // 启用门禁时要做三步：
   //    1) npx wrangler d1 create infinite-canvas
   //       把返回的 database_id 填到下面，然后取消这段注释
   //    2) npx wrangler d1 execute infinite-canvas --remote --file=./worker/schema.sql
-  //       npx wrangler secret put AUTH_SECRET
+  //    3) npx wrangler secret put AUTH_SECRET
   //
-  // 在取消注释之前，Worker 照常部署，静态站点不受影响；
-  // 只有 /api/* 会返回 500 server_not_configured（/api/health 除外，它始终可用）。
+  // 本地开发同理需要先取消注释（`wrangler dev` 没有绑定就拿不到 env.DB）。
   // ---------------------------------------------------------------------------
   // "d1_databases": [
   //   {

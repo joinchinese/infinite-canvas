@@ -2,6 +2,7 @@ import { createBrowserRouter, Outlet } from "react-router-dom";
 
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import UserLayout from "@/layouts/user-layout";
+import AdminMembersPage from "@/pages/admin/members";
 import AssetsPage from "@/pages/assets";
 import CanvasPage from "@/pages/canvas";
 import CanvasProjectPage from "@/pages/canvas/project";
@@ -29,6 +30,8 @@ export const router = createBrowserRouter([
             { path: "/canvas", element: <CanvasPage /> },
             { path: "/canvas/:id", element: <CanvasProjectPage /> },
             { path: "/config", element: <ConfigPage /> },
+            // 门禁叠加层新增：成员管理（页面内部再判一次角色，非管理员跳回首页）
+            { path: "/admin/members", element: <AdminMembersPage /> },
         ],
     },
     { path: "*", element: <NotFound /> },
