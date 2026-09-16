@@ -41,7 +41,7 @@ import { useTranslation } from "react-i18next";
 import { applySharedConfig, fetchSharedConfig, publishSharedConfig } from "@/services/api/shared-config";
 import { noteSharedConfigPublished, useAccessStore, useIsAdmin } from "@/stores/use-access-store";
 import { useConfigStore } from "@/stores/use-config-store";
-import { markSyncError, markSyncPending, markSyncSkipped, markSynced, markSyncing, useSharedConfigSyncStore, type SharedConfigSyncPhase } from "@/stores/use-shared-config-sync-store";
+import { markSyncError, markSyncPending, markSynced, markSyncing, useSharedConfigSyncStore, type SharedConfigSyncPhase } from "@/stores/use-shared-config-sync-store";
 
 /** 管理员侧的防抖窗口。拖滑块、连续打字都会落进同一个窗口，只发一次。 */
 const ADMIN_DEBOUNCE_MS = 1200;
@@ -68,11 +68,6 @@ function AdminAutoPublish() {
     const flush = useCallback(async (snapshot: string) => {
         // 读最新值而不是闭包里的 config：防抖窗口里配置可能又变过。
         const latest = useConfigStore.getState().config;
-        if (!latest.channels.some((channel) => channel.apiKey.trim())) {
-            markSyncSkipped("no-credentials");
-            baseline.current = snapshot;
-            return;
-        }
         if (flushing.current) {
             queued.current = snapshot;
             return;

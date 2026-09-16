@@ -172,6 +172,7 @@ async function main() {
 
         // 反向断言：把"配置"收紧成管理员专属时，最容易犯的错是顺手把管理员也一起锁掉。
         record("管理员顶栏能看到配置入口", (await page.locator('button[title="配置"]').count()) > 0);
+        record("管理员主导航里能看到配置入口（我的资产旁边）", (await page.locator('header nav a[href="/config"]').count()) > 0);
         await page.goto("/config", { waitUntil: "domcontentloaded" });
         await page.waitForSelector("header", { timeout: 30000 });
         record("管理员能直接打开 /config（没有被守卫弹走）", new URL(page.url()).pathname === "/config", page.url());
@@ -306,30 +307,71 @@ async function main() {
         record("配置界面显示了同步状态", await page.getByText(/已同步给成员|正在同步|有改动待同步/).first().isVisible().catch(() => false));
 
         // ---------------------------------------------------------------
-        console.log("\n【4c】护栏：本机没有可用密钥时，自动同步拒绝下发");
+        console.log("\n【4c】管理员删除渠道到只剩默认 → 自动同步成功下发");
         // ---------------------------------------------------------------
-        // 模拟"管理员换了台干净设备"：本机所有渠道的 apiKey 都是空的。
-        // 此时照常 PUT 的话，服务端会删掉 channel_secrets 里的全部真实 Key，
-        // 把所有人的配置一起打掉——所以要拦住，并且界面上说明原因。
-        const adminConfigSnapshot = await page.evaluate((key) => localStorage.getItem(key), CONFIG_STORE_KEY);
-        await page.evaluate((key) => {
-            const raw = JSON.parse(localStorage.getItem(key) || "{}");
-            const channels = raw?.state?.config?.channels;
-            if (Array.isArray(channels)) raw.state.config.channels = channels.map((channel) => ({ ...channel, apiKey: "" }));
-            localStorage.setItem(key, JSON.stringify(raw));
-        }, CONFIG_STORE_KEY);
-        // 整页重载让 store 从改过的 localStorage 恢复，并让自动同步重新记基线。
+        // 专门回归测试本次故障：老版本一旦渠道里没有带 Key 的渠道（例如删到只剩默认渠道），
+        // 自动同步就会误判为"没有凭据"而拒绝下发，导致服务端永远残留被删除的渠道。
+        // 正确行为：管理员删到只剩默认渠道，也能正常同步并清理服务端残留。
+        await page.goto("/config", { waitUntil: "domcontentloaded" });
+        await page.getByRole("tab", { name: "渠道" }).click();
+        // 验证当前有两个渠道（或多个渠道）
+        const deleteButtons = page.locator(".ant-tabs-tabpane button.ant-btn-text .lucide-trash-2");
+        if ((await deleteButtons.count()) > 0) {
+            // 点击删除额外渠道
+            await deleteButtons.first().click();
+            // 在确认弹窗里点确认
+            const popconfirmOk = page.locator(".ant-popconfirm .ant-btn-primary");
+            if ((await popconfirmOk.count()) > 0) {
+                await popconfirmOk.click();
+            }
+        }
+        // 等待自动同步防抖
+        let channelSynced = null;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            channelSynced = await page.evaluate(() => fetch("/api/config", { cache: "no-store" }).then((response) => response.json().catch(() => null)));
+            if (channelSynced?.config?.channels?.length === 1) break;
+            await page.waitForTimeout(500);
+        }
+        record("管理员删除额外渠道后，服务端成功同步只剩 1 个默认渠道", channelSynced?.config?.channels?.length === 1, `渠道数: ${channelSynced?.config?.channels?.length}`);
+
+        // 重新补回第二个渠道（因为后面的【7】依赖 ch-live 假上游做端到端代理测试）
+        await page.evaluate(
+            ({ key, realKey, liveKey, upstreamPort, liveMode }) => {
+                const raw = JSON.parse(localStorage.getItem(key) || "{}");
+                const channels = [
+                    {
+                        id: "ch-e2e",
+                        name: "E2E Channel",
+                        baseUrl: "https://api.example.com",
+                        apiKey: realKey,
+                        apiFormat: "openai",
+                        models: [{ name: "gpt-image-2", capability: "image" }],
+                    },
+                ];
+                if (!liveMode) {
+                    channels.push({
+                        id: "ch-live",
+                        name: "Live Upstream",
+                        baseUrl: `http://127.0.0.1:${upstreamPort}`,
+                        apiKey: liveKey,
+                        apiFormat: "openai",
+                        models: [{ name: "gpt-image-2", capability: "image" }],
+                    });
+                }
+                raw.state.config.channels = channels;
+                raw.state.config.systemPrompt = AUTO_SYNC_PROMPT;
+                localStorage.setItem(key, JSON.stringify(raw));
+            },
+            { key: CONFIG_STORE_KEY, realKey: REAL_KEY, liveKey: LIVE_KEY, upstreamPort: upstream?.port ?? 0, liveMode: LIVE_MODE },
+        );
         await page.goto("/config", { waitUntil: "domcontentloaded" });
         await page.getByRole("tab", { name: "偏好设置" }).click();
-        await page.getByPlaceholder(SYSTEM_PROMPT_PLACEHOLDER).fill("e2e-must-not-be-published");
-        await page.waitForTimeout(3000);
-
-        const afterGuard = await page.evaluate(() => fetch("/api/config", { cache: "no-store" }).then((response) => response.json().catch(() => null)));
-        record("本机无密钥时改动没有下发（服务端仍是上一次同步的值）", afterGuard?.config?.systemPrompt === AUTO_SYNC_PROMPT, String(afterGuard?.config?.systemPrompt));
-        record("本机无密钥时服务端渠道没被清空", afterGuard?.config?.channels?.length === (LIVE_MODE ? 1 : 2), String(afterGuard?.config?.channels?.length));
-        record("界面说明了未下发的原因", await page.getByText("未下发给成员").first().isVisible().catch(() => false));
-        // 恢复现场：后面的断言依赖"管理员本机存着真实 Key"（例如退出登录不清配置）。
-        await page.evaluate(({ key, snapshot }) => localStorage.setItem(key, snapshot), { key: CONFIG_STORE_KEY, snapshot: adminConfigSnapshot });
+        await page.getByPlaceholder(SYSTEM_PROMPT_PLACEHOLDER).fill(AUTO_SYNC_PROMPT);
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            const restored = await page.evaluate(() => fetch("/api/config", { cache: "no-store" }).then((response) => response.json().catch(() => null)));
+            if (restored?.config?.channels?.length === (LIVE_MODE ? 1 : 2)) break;
+            await page.waitForTimeout(500);
+        }
 
         // 留一份管理员的会话 Cookie 给【6b】：那时浏览器里已经是成员身份了，
         // 而【6b】需要"管理员在别处改了配置"这个动作。会话是无状态签名 Cookie、
@@ -406,8 +448,9 @@ async function main() {
         record("普通用户看不到成员表", (await page.locator("table").count()) === 0);
 
         // 配置（"配置与用户偏好"）属于高级设置：入口隐藏，而且直接敲 URL 也进不去。
-        // 旧版本这两条都是漏的——普通用户既看得见顶栏齿轮，也能打开 /config 改渠道和 API Key。
+        // 普通用户既看不到顶栏齿轮，也看不到主导航栏（我的资产旁边）的配置链接，打开 /config 也会被弹走。
         record("普通用户顶栏没有配置入口", (await page.locator('button[title="配置"]').count()) === 0);
+        record("普通用户主导航里没有配置入口（我的资产旁边）", (await page.locator('header nav a[href="/config"]').count()) === 0);
         await page.goto("/config", { waitUntil: "domcontentloaded" });
         await page.waitForSelector("header", { timeout: 30000 });
         record("普通用户访问 /config 被弹回首页", new URL(page.url()).pathname === "/", page.url());
