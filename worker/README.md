@@ -3,6 +3,13 @@
 `infinite-canvas` 的登录门禁、成员管理与 AI 请求代理。静态资源（Vite 产物）与 API 由**同一个 Worker** 提供，
 因此前后端同源，会话直接用 httpOnly Cookie，**不需要任何 CORS 配置**。
 
+> **线上地址：<https://canvas.joinhu01.fun>**（自定义域名，2026-09-16 绑定）
+>
+> **不要用 `infinite-canvas.join-chinese.workers.dev`。** 那个域名在部分网络下会被 **SNI 级阻断**——
+> TCP 443 是通的，但 TLS 握手被打断，换 DNS、改 hosts、换 CF 边缘 IP 全都无效；
+> 而**同 IP 段的自有域名完全正常**。所以对外可访问性依赖这个自定义域名，
+> 配置在 `wrangler.jsonc` 的 `routes` 里（`custom_domain: true`）。
+
 ## 文件
 
 | 文件 | 职责 |
@@ -241,7 +248,7 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
 
 ## 已验证 / 未验证
 
-**已实测**（`smoke-test.mjs`，131/131 通过；`e2e-access.mjs`，真实 Chromium 34/34 通过）：
+**已实测**（`smoke-test.mjs` 131/131；`e2e-access.mjs` 真实 Chromium，本地 34/34、**线上 27/27**）：
 
 - 初始化引导、登录、登出、会话校验
 - 成员增删改查、角色边界（普通用户一律 403）
@@ -260,12 +267,25 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
   证明是边生成边吐，没有被攒到最后
 - 浏览器端到端：首次初始化 → 建成员 → 发布配置 → 退出 → 普通用户登录 →
   本地配置被共享配置覆盖、`apiKey` 是占位符、`proxyUrl` 是本站、整个 localStorage 里没有真实 Key
-- **浏览器 → 代理 → 上游 的完整链路**：普通用户在页面里发出的请求经代理返回 200，
+- **浏览器 → 代理 → 上游 的完整链路**（本地模式）：普通用户在页面里发出的请求经代理返回 200，
   上游收到的是真 Key，而浏览器里自始至终没有它
+- **真实 HTTPS 部署**（线上模式，`canvas.joinhu01.fun`）：首次初始化 →
+  建成员 → 发布配置 → 退出 → 普通用户登录全流程通过。这一趟证明了本地 http
+  环境测不到的东西——**httpOnly 会话 Cookie 在真实 HTTPS 下正常工作**，
+  且 `proxyUrl` 被正确强制成 `https://canvas.joinhu01.fun`（而不是管理员本机的 `127.0.0.1:23210`）
+- 线上权限边界：匿名访问 `/api/config`、`/api/admin/members` 与代理路径
+  `/<完整目标URL>` 均返回 401
 - SPA 路由行为：深层路由刷新返回 200；导航请求不经过 Worker
 
-**未验证**：10ms CPU 上限在**真实免费版**下的表现（本地 dev 无此限制）。
-`wrangler dev` 里 `/https://...` 路径中 `//` 的规范化已覆盖单斜杠场景，线上行为待部署后确认。
+**未验证**：
+
+- 10ms CPU 上限在**真实免费版**下的表现（本地 dev 无此限制）。
+- **代理转发本身在线上未实测**。线上模式的【7】需要假上游，而 Worker 跑在 Cloudflare 边缘
+  够不到本机的 `127.0.0.1`，所以线上只验证到"代理路径已注册 + 鉴权生效（401）"。
+  转发、Key 注入、SSE 的**逻辑正确性由本地 131 + 34 条断言覆盖**（同一份代码），
+  线上与本地唯一可能的差异是 Cloudflare 生产环境的 `fetch` 行为（如路径里 `//` 的规范化）。
+  若要补上这最后一块，需要在线上模式里换一个**公网可达**的目标（如 `httpbin.org/anything`），
+  代价是引入外部依赖。
 
 **已知未收紧的口子**（阶段 4）：
 1. 普通用户仍能看到顶部的配置入口，直接访问 `/config` 也能打开配置页。
@@ -290,7 +310,32 @@ node worker/e2e-access.mjs http://127.0.0.1:8787
 在无头环境下它会先探测 `needsSetup`，**库非空时会直接退出并提示先清库**，不会跑出一堆无意义的失败。
 
 它在第【4】步会额外建一个指向**本地假上游**的渠道，第【7】步用真实浏览器发请求去验证
-Key 真的注入到了上游。所以 `wrangler dev` 必须是本机的（假上游监听在 `127.0.0.1`）。
+Key 真的注入到了上游。所以本地模式下 `wrangler dev` 必须是本机的（假上游监听在 `127.0.0.1`）。
+
+### 线上模式（`E2E_LIVE=1`）
+
+```bash
+E2E_LIVE=1 node worker/e2e-access.mjs https://canvas.joinhu01.fun
+```
+
+同一套脚本指向真实部署，用来验证**本地 http 环境测不到的东西**，主要是
+httpOnly Cookie 在真实 HTTPS 下的行为（`Secure` / `SameSite` 在 https 与 http 下判定不同）。
+
+代价是必须跳过依赖"本机假上游"的两段：【4】里的第二个渠道和整个【7】——
+线上 Worker 在 Cloudflare 边缘执行，够不到这台机器的 `127.0.0.1`。
+所以线上是 **27 条**断言、本地是 **34 条**，两者互补而不是互相替代。
+
+线上跑同样需要空库，跑完记得清库（用 D1 的 HTTP API 即可，不必装 wrangler）：
+
+```bash
+curl -X POST "https://api.cloudflare.com/client/v4/accounts/$ACC/d1/database/$DB/query" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --data-binary '{"sql":"DELETE FROM users; DELETE FROM app_config; DELETE FROM channel_secrets;"}'
+```
+
+> 线上跑曾经暴露过一个本地看不见的竞态：脚本只等 `<table>` 元素出现就去断言行内容，
+> 而表格壳先渲染、数据靠异步请求后到。本地回环几毫秒所以一直通过，
+> 线上跨洋 + D1 查询慢就翻车了。**等到具体那一行**才是正确写法。
 
 ## 排查笔记（踩过的坑）
 
@@ -306,6 +351,11 @@ Key 真的注入到了上游。所以 `wrangler dev` 必须是本机的（假上
 - **`wrangler.jsonc` 的 D1 绑定不要图省事改回注释。** 现在它是常驻启用的，
   注释掉之后 `wrangler dev` 拿不到 `env.DB`，`/api/*` 会全部落到 `database_unavailable`，
   本地测试会成片失败（这个坑踩过一次）。
+- **改了 `database_id`，本地的表会"凭空消失"。** miniflare 按这个 id 给本地 sqlite 文件命名
+  （`.wrangler/state/v3/d1/miniflare-D1DatabaseObject/<hash>.sqlite`），所以**换 id 等于换了个空库**，
+  表现是所有 `/api/*` 报 `no such table: users`。重新跑一次
+  `d1 execute infinite-canvas --local --file=./worker/schema.sql` 就好；
+  旧那个 sqlite 还留在目录里，可以直接删。
 - **本机网络访问不到 `*.workers.dev` 时，仍然可以验证线上部署。** 用 Cloudflare API
   下载线上脚本 + 查绑定，而不是靠 HTTP 请求：
 
