@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
+import { SharedConfigSyncStatus } from "@/components/access/shared-config-sync";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ConfigLocalProxy } from "@/components/layout/config-local-proxy";
 import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
@@ -166,7 +167,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     return (
         <>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-3 dark:border-stone-800">
-                <div className="text-xs text-stone-500">{t("config.fileSecurity")}</div>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                    <div className="text-xs text-stone-500">{t("config.fileSecurity")}</div>
+                    {/* 让"改动有没有真的下发出去"变成可见状态，见 components/access/shared-config-sync.tsx */}
+                    <SharedConfigSyncStatus />
+                </div>
                 <div className="flex gap-2">
                     <Button icon={<Upload className="size-4" />} onClick={() => configInputRef.current?.click()}>
                         {t("config.import")}

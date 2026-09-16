@@ -43,6 +43,14 @@ const REAL_KEY = "sk-e2e-real-key-must-not-reach-member";
 /** 第二个渠道的 Key：它指向本地假上游，用来验证"经代理后上游真的收到了真 Key"。 */
 const LIVE_KEY = "sk-e2e-live-key-injected-by-proxy";
 const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
+/** 会话 Cookie 名（`worker/http.ts`）。会话是无状态签名 Cookie，所以保存下来到后面依然有效。 */
+const SESSION_COOKIE = "ic_session";
+/** 「偏好设置」里系统提示词输入框的 placeholder——用它精确定位到那个 textarea，比按顺序取第几个稳。 */
+const SYSTEM_PROMPT_PLACEHOLDER = "例如：你是一位擅长电影感写实摄影的视觉导演。";
+/** 【4b】靠自动同步写进服务端的值，【5】会验证成员拿到的正是这个最新版本（而不是最初手动发布的那份）。 */
+const AUTO_SYNC_PROMPT = "e2e-autosync-prompt";
+/** 【6b】里"管理员在别处改配置"用的值，用来验证成员端会自动拉取新版本。 */
+const MEMBER_REFRESH_PROMPT = "e2e-member-autorefresh-prompt";
 
 // 线上模式（`E2E_LIVE=1`）：目标是真实的 Cloudflare 部署，用来验证本地 http 环境测不到的东西，
 // 主要是 **httpOnly Cookie 在真实 HTTPS 下的行为**（Secure / SameSite 在 https 与 http 下判定不同）。
@@ -276,6 +284,59 @@ async function main() {
         record("面板显示了最后发布时间", await page.getByText(/最后发布时间/).isVisible().catch(() => false));
 
         // ---------------------------------------------------------------
+        console.log("\n【4b】管理员改配置 → 自动同步（全程不点任何发布按钮）");
+        // ---------------------------------------------------------------
+        // 这一段针对的是一次真实故障：老版本要求管理员在配置界面改完后，
+        // **再去成员管理页点一次「发布当前配置」**。那一步没人会记得，
+        // 结果是服务端 app_config 一直是空的，成员只能看到出厂默认配置。
+        // 现在本地一改就自动 PUT，所以这里刻意一次都不碰发布按钮。
+        await page.goto("/config", { waitUntil: "domcontentloaded" });
+        await page.getByRole("tab", { name: "偏好设置" }).click();
+        await page.getByPlaceholder(SYSTEM_PROMPT_PLACEHOLDER).fill(AUTO_SYNC_PROMPT);
+
+        // 防抖窗口 1.2s，留足余量后再轮询服务端——服务端存到什么才是"同步成功"的权威判据。
+        let autoSynced = null;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            autoSynced = await page.evaluate(() => fetch("/api/config", { cache: "no-store" }).then((response) => response.json().catch(() => null)));
+            if (autoSynced?.config?.systemPrompt === AUTO_SYNC_PROMPT) break;
+            await page.waitForTimeout(500);
+        }
+        record("管理员改配置后自动同步到服务端（没点发布按钮）", autoSynced?.config?.systemPrompt === AUTO_SYNC_PROMPT, String(autoSynced?.config?.systemPrompt));
+        record("自动同步的响应里依然没有真实 Key", !JSON.stringify(autoSynced ?? {}).includes(REAL_KEY));
+        record("配置界面显示了同步状态", await page.getByText(/已同步给成员|正在同步|有改动待同步/).first().isVisible().catch(() => false));
+
+        // ---------------------------------------------------------------
+        console.log("\n【4c】护栏：本机没有可用密钥时，自动同步拒绝下发");
+        // ---------------------------------------------------------------
+        // 模拟"管理员换了台干净设备"：本机所有渠道的 apiKey 都是空的。
+        // 此时照常 PUT 的话，服务端会删掉 channel_secrets 里的全部真实 Key，
+        // 把所有人的配置一起打掉——所以要拦住，并且界面上说明原因。
+        const adminConfigSnapshot = await page.evaluate((key) => localStorage.getItem(key), CONFIG_STORE_KEY);
+        await page.evaluate((key) => {
+            const raw = JSON.parse(localStorage.getItem(key) || "{}");
+            const channels = raw?.state?.config?.channels;
+            if (Array.isArray(channels)) raw.state.config.channels = channels.map((channel) => ({ ...channel, apiKey: "" }));
+            localStorage.setItem(key, JSON.stringify(raw));
+        }, CONFIG_STORE_KEY);
+        // 整页重载让 store 从改过的 localStorage 恢复，并让自动同步重新记基线。
+        await page.goto("/config", { waitUntil: "domcontentloaded" });
+        await page.getByRole("tab", { name: "偏好设置" }).click();
+        await page.getByPlaceholder(SYSTEM_PROMPT_PLACEHOLDER).fill("e2e-must-not-be-published");
+        await page.waitForTimeout(3000);
+
+        const afterGuard = await page.evaluate(() => fetch("/api/config", { cache: "no-store" }).then((response) => response.json().catch(() => null)));
+        record("本机无密钥时改动没有下发（服务端仍是上一次同步的值）", afterGuard?.config?.systemPrompt === AUTO_SYNC_PROMPT, String(afterGuard?.config?.systemPrompt));
+        record("本机无密钥时服务端渠道没被清空", afterGuard?.config?.channels?.length === (LIVE_MODE ? 1 : 2), String(afterGuard?.config?.channels?.length));
+        record("界面说明了未下发的原因", await page.getByText("未下发给成员").first().isVisible().catch(() => false));
+        // 恢复现场：后面的断言依赖"管理员本机存着真实 Key"（例如退出登录不清配置）。
+        await page.evaluate(({ key, snapshot }) => localStorage.setItem(key, snapshot), { key: CONFIG_STORE_KEY, snapshot: adminConfigSnapshot });
+
+        // 留一份管理员的会话 Cookie 给【6b】：那时浏览器里已经是成员身份了，
+        // 而【6b】需要"管理员在别处改了配置"这个动作。会话是无状态签名 Cookie、
+        // 没有 sessions 表，所以在这里留一份不会踢掉浏览器正在用的那个。
+        const adminSession = (await page.context().cookies()).find((cookie) => cookie.name === SESSION_COOKIE);
+
+        // ---------------------------------------------------------------
         console.log("\n【5】退出登录 → 普通用户登录 → 共享配置生效");
         // ---------------------------------------------------------------
         await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -303,7 +364,9 @@ async function main() {
 
         const memberStorage = await page.evaluate((key) => localStorage.getItem(key) || "", CONFIG_STORE_KEY);
         const memberConfig = JSON.parse(memberStorage).state?.config ?? {};
-        record("普通用户的本地配置已换成共享配置（systemPrompt）", memberConfig.systemPrompt === "e2e-system-prompt", String(memberConfig.systemPrompt));
+        // 断言用的是【4b】自动同步写进去的值，所以这一条同时证明了两件事：
+        // 普通用户拿到的确实是服务端的配置，而且是**最新版本**（不是【4】手动发布的那份）。
+        record("普通用户的本地配置已换成共享配置（systemPrompt）", memberConfig.systemPrompt === AUTO_SYNC_PROMPT, String(memberConfig.systemPrompt));
         record("渠道 baseUrl 保持真实上游地址", memberConfig.channels?.[0]?.baseUrl === "https://api.example.com", String(memberConfig.channels?.[0]?.baseUrl));
         record("渠道 apiKey 是占位符（带渠道 id，代理据此定位密钥）", memberConfig.channels?.[0]?.apiKey === "via-proxy:ch-e2e", String(memberConfig.channels?.[0]?.apiKey));
         record("代理被强制开启", memberConfig.proxyEnabled === true, String(memberConfig.proxyEnabled));
@@ -316,7 +379,7 @@ async function main() {
         const memberStorageDump = await page.evaluate(() => JSON.stringify(localStorage));
         record(
             "自检：localStorage 扫描确实读到了内容（后面几条 Key 断言的前提）",
-            memberStorageDump.includes(CONFIG_STORE_KEY) && memberStorageDump.includes("e2e-system-prompt"),
+            memberStorageDump.includes(CONFIG_STORE_KEY) && memberStorageDump.includes(AUTO_SYNC_PROMPT),
             `序列化长度 ${memberStorageDump.length}`,
         );
         record(
@@ -358,6 +421,39 @@ async function main() {
         record("普通用户带凭据参数访问时地址栏被擦干净", !page.url().includes("apiKey"), page.url());
         record("普通用户不会被 URL 参数写进渠道", !(await page.evaluate(() => JSON.stringify(localStorage))).includes("injected.example.com"));
         record("普通用户不会因此被弹出配置界面", (await page.getByText("配置由管理员统一管理").count()) === 0);
+
+        // ---------------------------------------------------------------
+        console.log("\n【6b】管理员更新配置 → 成员不刷新页面也能自动拿到");
+        // ---------------------------------------------------------------
+        // 这是"自动同步"的另一半。只做管理员侧的推送的话，成员得手动刷新才看得到，
+        // 现象上仍然是"我改了但他们没变"。成员侧因此加了定时 + 页面重新可见时的拉取。
+        // 这里不等那 60s 轮询，直接派发 visibilitychange 走"页面重新可见"那条路径。
+        record("拿到了管理员的会话 Cookie（用来模拟另一个人在改配置）", Boolean(adminSession), adminSession ? "" : "没拿到 ic_session");
+        await page.goto("/", { waitUntil: "domcontentloaded" });
+        await page.waitForSelector("header", { timeout: 30000 });
+
+        const readMemberPrompt = (key) => page.evaluate((storeKey) => JSON.parse(localStorage.getItem(storeKey) || "{}")?.state?.config?.systemPrompt ?? null, key);
+        const beforeRefresh = await readMemberPrompt(CONFIG_STORE_KEY);
+        record("成员此刻用的还是上一版配置", beforeRefresh === AUTO_SYNC_PROMPT, String(beforeRefresh));
+
+        // 用管理员的会话直接在 Worker 上改配置，等价于"管理员在另一台电脑上改完并同步了"。
+        const adminCookieHeader = `${SESSION_COOKIE}=${adminSession?.value ?? ""}`;
+        const adminConfigPayload = await fetch(`${BASE_URL}/api/config`, { headers: { cookie: adminCookieHeader } }).then((response) => response.json());
+        const writeResponse = await fetch(`${BASE_URL}/api/config`, {
+            method: "PUT",
+            headers: { cookie: adminCookieHeader, "content-type": "application/json" },
+            body: JSON.stringify({ config: { ...(adminConfigPayload.config || {}), systemPrompt: MEMBER_REFRESH_PROMPT } }),
+        });
+        record("模拟的管理员改写成功", writeResponse.ok, `HTTP ${writeResponse.status}`);
+
+        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        let memberRefreshed = null;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            memberRefreshed = await readMemberPrompt(CONFIG_STORE_KEY);
+            if (memberRefreshed === MEMBER_REFRESH_PROMPT) break;
+            await page.waitForTimeout(500);
+        }
+        record("成员页面不刷新就自动应用了管理员的新配置", memberRefreshed === MEMBER_REFRESH_PROMPT, String(memberRefreshed));
 
         // ---------------------------------------------------------------
         // 【7】只在本地模式跑：它依赖"本机假上游"，而线上 Worker 够不到这台机器（见 LIVE_MODE 说明）。

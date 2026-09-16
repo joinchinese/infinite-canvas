@@ -25,6 +25,7 @@ import { OctagonAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import LoginPage from "@/pages/login";
+import { SharedConfigSync } from "@/components/access/shared-config-sync";
 import { bootstrapAccess, reloadAccess, useAccessStore } from "@/stores/use-access-store";
 
 export function AccessGate({ children }: { children: ReactNode }) {
@@ -41,7 +42,14 @@ export function AccessGate({ children }: { children: ReactNode }) {
     if (status === "unauthenticated") return <LoginPage />;
     if (status === "degraded") return <DegradedNotice code={errorCode} hintKey={`access.gate.hint${errorCode === "database_unavailable" ? "DatabaseUnavailable" : "ServerNotConfigured"}`}>{children}</DegradedNotice>;
     if (status === "error") return <GateError code={errorCode} message={errorMessage} />;
-    return <>{children}</>;
+    // `SharedConfigSync` 只在已登录时挂载：管理员侧负责把本地改动自动下发给成员，
+    // 成员侧负责在管理员更新后自动取回。它渲染成 null，不占布局。
+    return (
+        <>
+            <SharedConfigSync />
+            {children}
+        </>
+    );
 }
 
 function GateLoading() {

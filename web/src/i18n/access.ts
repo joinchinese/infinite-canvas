@@ -146,6 +146,18 @@ const zhCN = {
         previewEmpty: "当前没有任何渠道，普通用户无法生成内容。",
         publishFailed: "发布失败",
     },
+    sync: {
+        adminIdle: "改动会自动同步给成员",
+        pending: "有改动待同步…",
+        syncing: "正在同步…",
+        adminSynced: "已同步给成员 · {{time}}",
+        skipped: "未下发给成员",
+        failed: "同步失败",
+        autoHint: "配置里的改动会在你停止操作约 1 秒后自动发布给所有成员；成员无需任何操作，最迟 1 分钟生效。",
+        skippedDetail: "本机所有渠道都没有密钥（通常是换了台干净设备）。直接下发会把线上的渠道与真实密钥一起清空，所以这次改动没有发布——请先在本机把渠道密钥填好。",
+        failedDetail: "同步失败：{{message}}。改动目前只存在这台电脑上，成员看不到。请检查网络或重新登录后再改一次。",
+        memberUpdated: "管理员更新了配置，已自动应用",
+    },
 };
 
 const enUS = {
@@ -282,6 +294,18 @@ const enUS = {
         previewProxy: "proxyUrl points at this site; requests are proxied by the Worker",
         previewEmpty: "No channels configured — members cannot generate anything.",
         publishFailed: "Publish failed",
+    },
+    sync: {
+        adminIdle: "Changes sync to members automatically",
+        pending: "Changes pending…",
+        syncing: "Syncing…",
+        adminSynced: "Synced to members · {{time}}",
+        skipped: "Not published",
+        failed: "Sync failed",
+        autoHint: "Changes here are published to all members about a second after you stop editing. Members need no action and see it within a minute.",
+        skippedDetail: "No channel on this machine has an API key (usually a fresh device). Publishing would wipe every channel and real key on the server, so nothing was published. Fill in a channel key here first.",
+        failedDetail: "Sync failed: {{message}}. Your change currently exists only on this computer; members cannot see it. Check your connection or sign in again, then edit once more.",
+        memberUpdated: "An administrator updated the configuration; it has been applied",
     },
 };
 

@@ -31,6 +31,7 @@ import { create } from "zustand";
 
 import { AccessApiError, fetchMe, loginRequest, logoutRequest, setupRequest, type AccessUser } from "@/services/api/auth";
 import { applySharedConfig, fetchSharedConfig, type SharedConfigResponse } from "@/services/api/shared-config";
+import { resetSyncState } from "@/stores/use-shared-config-sync-store";
 
 export type AccessStatus = "loading" | "unauthenticated" | "authenticated" | "degraded" | "error";
 
@@ -202,6 +203,8 @@ export async function signOut(): Promise<void> {
         // 服务端可能已经失效，本地照样清干净。
     }
     bootstrapTask = Promise.resolve();
+    // 同步状态是"上一个登录者"的，别让它跨会话留着。
+    resetSyncState();
     useAccessStore.setState({
         status: "unauthenticated",
         user: null,
