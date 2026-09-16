@@ -248,7 +248,7 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
 
 ## 已验证 / 未验证
 
-**已实测**（`smoke-test.mjs` 131/131；`e2e-access.mjs` 真实 Chromium，本地 34/34、**线上 27/27**）：
+**已实测**（`smoke-test.mjs` 131/131；`e2e-access.mjs` 真实 Chromium，本地 44/44）：
 
 - 初始化引导、登录、登出、会话校验
 - 成员增删改查、角色边界（普通用户一律 403）
@@ -267,6 +267,14 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
   证明是边生成边吐，没有被攒到最后
 - 浏览器端到端：首次初始化 → 建成员 → 发布配置 → 退出 → 普通用户登录 →
   本地配置被共享配置覆盖、`apiKey` 是占位符、`proxyUrl` 是本站、整个 localStorage 里没有真实 Key
+- **配置只对管理员开放**（浏览器端逐条验证）：
+  - 管理员顶栏有配置入口、能直接打开 `/config`、看到的是真实配置界面（反向断言——
+    收紧权限时最容易犯的错是把管理员也一起锁掉）
+  - 普通用户顶栏没有配置入口，直接访问 `/config` 被弹回首页、看不到配置界面
+  - `?baseUrl=&apiKey=` 这条"扫码导入渠道凭据"的路径对普通用户整段跳过：
+    地址栏被擦干净、没有写进渠道、也没有弹出配置框
+  - 另有一条**自检**：几条"找不到真实 Key"的断言都是把 localStorage 序列化后搜索，
+    先确认这个序列化真的读到了内容（本次 1420 字节），否则那些断言会永远成立
 - **浏览器 → 代理 → 上游 的完整链路**（本地模式）：普通用户在页面里发出的请求经代理返回 200，
   上游收到的是真 Key，而浏览器里自始至终没有它
 - **真实 HTTPS 部署**（线上模式，`canvas.joinhu01.fun`）：首次初始化 →
@@ -282,16 +290,20 @@ Worker  password_hash  = HMAC-SHA256(AUTH_SECRET, "pw:v1:"+用户名小写+":"+c
 - 10ms CPU 上限在**真实免费版**下的表现（本地 dev 无此限制）。
 - **代理转发本身在线上未实测**。线上模式的【7】需要假上游，而 Worker 跑在 Cloudflare 边缘
   够不到本机的 `127.0.0.1`，所以线上只验证到"代理路径已注册 + 鉴权生效（401）"。
-  转发、Key 注入、SSE 的**逻辑正确性由本地 131 + 34 条断言覆盖**（同一份代码），
+  转发、Key 注入、SSE 的**逻辑正确性由本地 131 + 44 条断言覆盖**（同一份代码），
   线上与本地唯一可能的差异是 Cloudflare 生产环境的 `fetch` 行为（如路径里 `//` 的规范化）。
   若要补上这最后一块，需要在线上模式里换一个**公网可达**的目标（如 `httpbin.org/anything`），
   代价是引入外部依赖。
 
 **已知未收紧的口子**（阶段 4）：
-1. 普通用户仍能看到顶部的配置入口，直接访问 `/config` 也能打开配置页。
-   这只影响本地那份会被共享配置覆盖的副本，**拿不到真实 Key、也改不动服务端**，
-   但按需求"普通用户看不到配置"来说还没做完。
-2. 代理是"登录用户可用的转发器"，没有 origin 白名单（见上面"刻意的取舍"）。
+
+1. 代理是"登录用户可用的转发器"，没有 origin 白名单（见上面"刻意的取舍"）。
+
+> 阶段 4 的另一半——"普通用户看不到配置"——**已完成**。三层一起做：
+> 顶栏入口按角色渲染、`/config` 加路由守卫、**配置弹窗层兜底**（上游十几处
+> `openConfigDialog` 自动调用点因此一处都不用改）。判定集中在 `useCanOpenConfig()`，
+> 同时放行 `degraded`（服务端还没配好的窗口期，把正在配置的管理员锁在门外更糟）。
+> 详见 `web/src/stores/use-access-store.ts` 的注释。
 
 ## 浏览器端到端测试
 
@@ -323,7 +335,11 @@ httpOnly Cookie 在真实 HTTPS 下的行为（`Secure` / `SameSite` 在 https �
 
 代价是必须跳过依赖"本机假上游"的两段：【4】里的第二个渠道和整个【7】——
 线上 Worker 在 Cloudflare 边缘执行，够不到这台机器的 `127.0.0.1`。
-所以线上是 **27 条**断言、本地是 **34 条**，两者互补而不是互相替代。
+所以线上比本地少 7 条：本地是 **44 条**，线上模式则是 **37 条**，两者互补而不是互相替代。
+
+> 37 这个数字是按脚本静态推算的，**不是实测**：线上库里已经有真实用户数据，
+> 而脚本探测到库非空就会直接退出，不能为了跑测试去清用户的库。
+> 阶段 3 时线上跑过 27/27，那是当时 34 条版本下的数字。
 
 线上跑同样需要空库，跑完记得清库（用 D1 的 HTTP API 即可，不必装 wrangler）：
 
@@ -371,3 +387,25 @@ curl -X POST "https://api.cloudflare.com/client/v4/accounts/$ACC/d1/database/$DB
   ```
 
   这只能证明"代码与绑定在位"，**不能替代真实请求验证**。要真正跑通还得有可达的域名。
+- **本机 `wrangler deploy` 会在最后一步失败，而部署其实靠 CI 完成。**
+  `wrangler.jsonc` 里的 `routes`（自定义域名）需要 zone 级的
+  `Workers Routes: Edit` 权限，而常用的账户级 API Token 没有它。表现是：
+  `Uploaded infinite-canvas (8.60 sec)` 之后紧跟
+  `Authentication error [code: 10000]`（`/zones/<id>/workers/routes`），
+  退出码非 0、**deployment 也没创建**。
+  正确的做法是**推到 GitHub，让 Cloudflare Workers Builds 构建部署**——
+  它用平台内部凭据，不受这个权限限制。验证方式见下一条。
+- **不要用构建产物的文件名去判断线上跑的是哪一版。** CF 用 Bun 构建，
+  本机用 Node 构建，同一份源码产出的文件名 hash **不一样**
+  （实测：本机 `index-DaRahg9S.js`，线上 `index-DLmQG0Ve.js`）。
+  抓线上 `index.html` 认出文件名后去请求它，若内容不对还会被 SPA 兜底成 HTML……
+  真正可靠的判据是**在 bundle 里搜一个只可能出现在新代码里的字符串**：
+
+  ```bash
+  curl -s https://canvas.joinhu01.fun/ | grep -o 'assets/index-[A-Za-z0-9_-]*\.js' | head -1
+  curl -s "https://canvas.joinhu01.fun/assets/<上一步的文件名>" -o live-bundle.js
+  grep -c "只在本次新增的文案" live-bundle.js     # 命中即证明新版本已上线
+  ```
+
+  顺带记一个 Git Bash 的坑：Windows 原生 `curl` 不认识 `/tmp/...`（会当成 `C:\tmp`），
+  用 `-o /tmp/x` 写文件会静默失败，改用相对路径或 Windows 路径。
