@@ -4,7 +4,9 @@ import { ArrowUp, Check, ChevronUp, Cpu, Gauge, Hand, ImagePlus, LoaderCircle, P
 import { useTranslation } from "react-i18next";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { CanvasImageSettingsPopover } from "@/components/canvas/canvas-image-settings-popover";
 import { canvasThemes } from "@/lib/canvas-theme";
+import type { AiConfig } from "@/stores/use-config-store";
 import { useAgentStore, type AgentModel, type AgentPermissionMode, type AgentReasoningEffort } from "@/stores/use-agent-store";
 import type { AgentChatAttachment } from "./agent-chat-message";
 import { AgentChatPromptInput } from "./agent-chat-prompt-input";
@@ -33,6 +35,8 @@ export function AgentChatComposer({
     imageModels,
     imageModel,
     onImageModelChange,
+    imageConfig,
+    onImageConfigChange,
     left,
 }: {
     prompt: string;
@@ -58,6 +62,8 @@ export function AgentChatComposer({
     imageModels?: Array<{ model: string; displayName: string }>;
     imageModel?: string;
     onImageModelChange?: (imageModel: string) => void;
+    imageConfig?: AiConfig;
+    onImageConfigChange?: (key: keyof AiConfig, value: string) => void;
     left?: ReactNode;
 }) {
     const { t } = useTranslation();
@@ -111,6 +117,14 @@ export function AgentChatComposer({
                                 imageModels={imageModels}
                                 imageModel={imageModel}
                                 onImageModelChange={onImageModelChange}
+                            />
+                        ) : null}
+                        {imageConfig && onImageConfigChange ? (
+                            <CanvasImageSettingsPopover
+                                config={imageConfig}
+                                onConfigChange={onImageConfigChange}
+                                placement="topLeft"
+                                buttonClassName="!h-9 !rounded-full !border-0 !bg-transparent hover:!bg-black/5 dark:hover:!bg-white/10 !px-2.5 !text-xs !font-medium !shadow-none !max-w-[200px]"
                             />
                         ) : null}
                         {left}

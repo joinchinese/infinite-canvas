@@ -88,13 +88,22 @@ export async function runBuiltinAgentTurn(
         ? `\n\n【当前画布环境快照】\n- 项目标题: ${snapshot.title || "未命名画布"}\n- 节点数量: ${snapshot.nodes.length} 个（${snapshot.nodes.map((n) => `[${n.type}] ${n.title || n.id}`).join("、") || "空"}）\n- 连线数量: ${snapshot.connections.length} 条`
         : "\n\n【当前没有已连接的画布】";
 
-    const imageModelPrompt = selectedImageModel
-        ? `\n\n【用户指定的生图模型】\n当前用户在面板中指定的绘图模型为: "${selectedImageModel}" (${selectedImageModelLabel})。\n当你创建生图配置节点（add_node, nodeType: "config"）时，必须在 metadata.model 中填入 "${selectedImageModel}"，确保使用该模型渲染。`
-        : "";
+    const defaultSize = configState.size || "1:1";
+    const defaultCount = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(configState.canvasImageCount || configState.count)) || 1)));
+    const defaultQuality = configState.quality || "auto";
+
+    const imageSettingsPrompt = `\n\n【生图面板默认参数】
+- 当前绘图模型: "${selectedImageModel || "默认"}" (${selectedImageModelLabel || "默认"})
+- 当前面板画幅比例 (size): "${defaultSize}"
+- 当前面板生成张数 (count): ${defaultCount}
+- 当前面板画质质量 (quality): "${defaultQuality}"
+【生图参数遵从规则】：
+1. 当用户创建生图配置节点（config 节点）且未特别指定比例或张数时，默认使用上述面板参数；
+2. 当用户在指令中明确要求了画幅比例（如 "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"）或生成数量（如 1张、2张等）时，必须严格将对应的值填入 metadata.size 与 metadata.count 中，严禁忽略！`;
 
     const systemMessage: ChatMessage = {
         role: "system",
-        content: `${BUILTIN_AGENT_SYSTEM_PROMPT}${imageModelPrompt}${canvasSummary}`,
+        content: `${BUILTIN_AGENT_SYSTEM_PROMPT}${imageSettingsPrompt}${canvasSummary}`,
     };
 
     // 提取历史对话中最近的几轮纯对话（避免上下文过载）
@@ -212,12 +221,33 @@ export async function runBuiltinAgentTurn(
                             toolOutput = JSON.stringify({ error: "当前没有已连接的画布上下文" });
                         } else {
                             const rawOps = (parsedArgs.ops as CanvasAgentOp[]) || [];
+                            const promptAspect = userPrompt.match(/\b(16:9|9:16|1:1|4:3|3:4|21:9)\b/i)?.[1];
+                            const promptCount = /([1一]\s*[张幅个]|单张)/.test(userPrompt)
+                                ? 1
+                                : /([2两二]\s*[张幅个])/.test(userPrompt)
+                                    ? 2
+                                    : /([3三]\s*[张幅个])/.test(userPrompt)
+                                        ? 3
+                                        : /([4四]\s*[张幅个])/.test(userPrompt)
+                                            ? 4
+                                            : undefined;
+
                             const ops = rawOps.map((op) => {
                                 if (op.type === "add_node" && (op.nodeType === "config" || !op.nodeType)) {
-                                    const meta = op.metadata || {};
+                                    const meta = { ...(op.metadata || {}) };
                                     if (!meta.model && selectedImageModel) {
-                                        return { ...op, metadata: { ...meta, model: selectedImageModel } };
+                                        meta.model = selectedImageModel;
                                     }
+                                    if (!meta.size) {
+                                        meta.size = promptAspect || defaultSize;
+                                    }
+                                    if (!meta.count) {
+                                        meta.count = promptCount || defaultCount;
+                                    }
+                                    if (!meta.quality) {
+                                        meta.quality = defaultQuality;
+                                    }
+                                    return { ...op, metadata: meta };
                                 }
                                 return op;
                             });

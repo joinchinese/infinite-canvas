@@ -15,6 +15,9 @@ export const BUILTIN_AGENT_SYSTEM_PROMPT = `你是 Infinite Canvas（无限画�
      - "image": 图片节点。
      - "video": 视频节点。
      - "audio": 音频节点。
+   - **config 节点参数严格遵从（极其重要）**：
+     - 当用户指定了画幅比例（例如 16:9、9:16、1:1、4:3、3:4、21:9 等）或生成张数（例如 1张、一张、2张等）时，必须严格将对应值写入 metadata.size 与 metadata.count 中，严禁忽略！
+     - 示例：若用户要求“生成一张16:9的赛博朋克图”，则 config 节点 metadata 必须包含：\`{ composerContent: "...", size: "16:9", count: 1 }\`。
    - 节点尺寸（参考）：text 节点宽 280 高 160；config 节点宽 340 高 240。
    - 节点布局：创建多个节点时，注意排列坐标（x, y），从左往右或从上往下排列，避免完全重叠覆盖。
    - 工作流连线：如果要建立工作流（例如让提示词文本节点作为生图配置节点的输入），使用 connect_nodes 操作：{ type: "connect_nodes", fromNodeId, toNodeId }。
@@ -73,7 +76,29 @@ export const BUILTIN_AGENT_TOOLS = [
                                 height: { type: "number", description: "节点高度（像素）" },
                                 metadata: {
                                     type: "object",
-                                    description: "节点的元数据内容。如文本节点的文本写在 content 字段；配置节点的提示词写在 composerContent 字段",
+                                    description: "节点的元数据内容。不同节点类型的关键字段：\n- text 节点：content (string, 文本内容)\n- config 节点：\n  - composerContent (string, 提示词内容)\n  - size (string, 画幅比例，如 '16:9', '9:16', '1:1', '4:3', '3:4', '21:9'。当用户指定比例时必须设置！)\n  - count (number, 单次生成张数，通常 1 到 4。当用户指定张数时必须设置！)\n  - quality (string, 生成质量，如 'auto', 'standard', 'hd')\n  - model (string, 指定的生成模型)",
+                                    properties: {
+                                        content: { type: "string", description: "文本节点的正文内容" },
+                                        composerContent: { type: "string", description: "配置节点的生成提示词" },
+                                        size: {
+                                            type: "string",
+                                            enum: ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "auto"],
+                                            description: "画幅比例。如用户要求 16:9，必须在此处传入 '16:9'，禁止忽略！",
+                                        },
+                                        count: {
+                                            type: "number",
+                                            description: "生成图片数量，通常 1 到 4 张。如用户指定 1 张，必须在此处传入 1！",
+                                        },
+                                        quality: {
+                                            type: "string",
+                                            enum: ["auto", "standard", "hd"],
+                                            description: "画质质量等级",
+                                        },
+                                        model: {
+                                            type: "string",
+                                            description: "指定的生成模型 identifier",
+                                        },
+                                    },
                                 },
                                 patch: {
                                     type: "object",

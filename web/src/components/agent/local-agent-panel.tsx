@@ -199,6 +199,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
 
     const globalConfig = useConfigStore((state) => state.config);
+    const updateConfig = useConfigStore((state) => state.updateConfig);
 
     // 思考模型列表
     const effectiveModels = useMemo<AgentModel[]>(() => {
@@ -1619,6 +1620,11 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                         onImageModelChange={(newImageModel) => {
                             localStorage.setItem("canvas-agent-image-model", newImageModel);
                             setAgentState({ imageModel: newImageModel });
+                        }}
+                        imageConfig={globalConfig}
+                        onImageConfigChange={(key, value) => {
+                            updateConfig(key, value);
+                            if (key === "count") updateConfig("canvasImageCount", value);
                         }}
                         left={
                             attachments.length ? (
