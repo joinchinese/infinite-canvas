@@ -132,21 +132,20 @@ async function runBootstrap(): Promise<void> {
 }
 
 /**
- * 登录成功后的收尾：普通用户需要先把共享配置落到本地，**再**把状态切成已登录。
+ * 登录成功后的收尾：把云端共享配置同步落到本地，**再**把状态切成已登录。
  *
  * 顺序很重要——配置没落地就渲染应用的话，页面会先按默认配置闪一下（模型列表为空）。
+ * 无论普通用户还是管理员换新设备登录，都需要从云端拉取共享配置，使两端配置保持一致。
  */
 async function finishAuthentication(user: AccessUser): Promise<void> {
     let sharedConfigUpdatedAt: number | null = null;
     let sharedConfigMissingSecrets: string[] = [];
 
-    if (user.role !== "admin") {
-        const shared = await loadSharedConfigQuietly();
-        if (shared?.config) {
-            applySharedConfig(shared.config);
-            sharedConfigUpdatedAt = shared.updatedAt;
-            sharedConfigMissingSecrets = shared.missingSecrets;
-        }
+    const shared = await loadSharedConfigQuietly();
+    if (shared?.config) {
+        applySharedConfig(shared.config);
+        sharedConfigUpdatedAt = shared.updatedAt;
+        sharedConfigMissingSecrets = shared.missingSecrets;
     }
 
     useAccessStore.setState({

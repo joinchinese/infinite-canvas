@@ -58,12 +58,17 @@ export function SharedConfigSync() {
 // ---------------------------------------------------------------------------
 
 function AdminAutoPublish() {
+    const { message } = App.useApp();
+    const { t } = useTranslation();
     const config = useConfigStore((state) => state.config);
     /** 已经同步给服务端的那份配置（JSON 串）。`null` 表示还没记过基线。 */
     const baseline = useRef<string | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const flushing = useRef(false);
     const queued = useRef<string | null>(null);
+    /** 记录已同步的服务端版本号，用于多设备协同更新判定 */
+    const knownUpdatedAt = useRef<number | null>(useAccessStore.getState().sharedConfigUpdatedAt);
+    const checkingRemote = useRef(false);
 
     const flush = useCallback(async (snapshot: string) => {
         // 读最新值而不是闭包里的 config：防抖窗口里配置可能又变过。
@@ -78,6 +83,7 @@ function AdminAutoPublish() {
         try {
             const result = await publishSharedConfig(latest);
             noteSharedConfigPublished(result.updatedAt, result.missingSecrets);
+            knownUpdatedAt.current = result.updatedAt;
             baseline.current = snapshot;
             markSynced();
         } catch (error) {
@@ -110,15 +116,47 @@ function AdminAutoPublish() {
         };
     }, [config, flush]);
 
+    // 多设备协同：当管理员切回浏览器标签页或定期检查时，
+    // 若本地没有正在编辑的未保存改动，且云端有其他设备发布的新版本，则自动静默同步对齐
+    const checkRemoteUpdate = useCallback(async () => {
+        if (checkingRemote.current) return;
+        // 如果当前本地有改动等待防抖或正在提交，绝不覆盖管理员正在编辑的内容
+        if (timer.current || flushing.current || queued.current) return;
+        const currentSnapshot = JSON.stringify(useConfigStore.getState().config);
+        if (baseline.current !== null && currentSnapshot !== baseline.current) return;
+
+        checkingRemote.current = true;
+        try {
+            const shared = await fetchSharedConfig();
+            if (!shared.config || !shared.updatedAt) return;
+            if (knownUpdatedAt.current && shared.updatedAt <= knownUpdatedAt.current) return;
+
+            applySharedConfig(shared.config);
+            noteSharedConfigPublished(shared.updatedAt, shared.missingSecrets);
+            knownUpdatedAt.current = shared.updatedAt;
+            baseline.current = JSON.stringify(useConfigStore.getState().config);
+            markSynced(shared.updatedAt);
+            message.info(t("access.sync.memberUpdated"));
+        } catch {
+            // 忽略临时网络异常
+        } finally {
+            checkingRemote.current = false;
+        }
+    }, [message, t]);
+
+    useEffect(() => {
+        const interval = setInterval(() => void checkRemoteUpdate(), MEMBER_POLL_MS);
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") void checkRemoteUpdate();
+        };
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+    }, [checkRemoteUpdate]);
+
     // 补推：服务端还什么都没有，但本机已经配好了。
-    //
-    // 这个分支专门救"升级前就配好了、但从来没发布过"的情形——最典型的就是这次改造本身：
-    // 管理员在本机早就配好了渠道，只是当时还没有自动同步，服务端一直是空的。
-    // 没有这一步的话，他只要不去动任何设置，本地这份配置就永远不会被下发出去
-    // （基线机制决定了"挂载时的第一份配置不推送"），问题会原样复现。
-    //
-    // 只在挂载时读一次服务端状态，之后完全由本地改动驱动——刻意不做轮询，
-    // 免得管理员的浏览器每隔一会儿就对服务端发一次 GET。
     useEffect(() => {
         let cancelled = false;
         void (async () => {

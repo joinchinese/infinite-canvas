@@ -71,17 +71,41 @@ export function publishSharedConfig(config: AiConfig): Promise<PublishSharedConf
     return requestJson<PublishSharedConfigResponse>("/api/config", { method: "PUT", body: JSON.stringify({ config }) });
 }
 
+/** 判断一个 apiKey 是否为占位符（via-proxy 或 via-proxy:channelId） */
+export function isSharedApiKeyPlaceholder(value: string | undefined | null): boolean {
+    if (!value) return false;
+    const text = value.trim();
+    return text === "via-proxy" || text.startsWith("via-proxy:");
+}
+
 /**
  * 把服务端下发的配置写进本地 store。
  *
  * 覆盖策略是**整体替换**：管理员配好的渠道与偏好就是普通用户的全部设置，
  * 普通用户本地原有的东西（除了 WebDAV 这类纯个人凭据）不保留。
  *
+ * 智能保护：如果本地已经存在某个渠道的真实 API Key（非占位符），在合入时予以保留，
+ * 避免管理员在配置机器上被云端脱敏后的占位符盖掉真实 Key；新机器登录则继承云端占位符走代理。
+ *
  * 用 `defaultConfig` 打底再铺开 `shared`，是为了在上游给 `AiConfig` 加字段时，
  * 旧的服务端数据也不会让本地出现 `undefined` 字段（对应方案里的"上游重构 AiConfig"风险）。
  */
 export function applySharedConfig(shared: AiConfig, origin: string = window.location.origin): void {
-    const channels = (Array.isArray(shared.channels) ? shared.channels : []).map((channel) => createModelChannel(channel));
+    const currentConfig = useConfigStore.getState().config;
+    const localRealKeys = new Map<string, string>();
+    for (const channel of currentConfig?.channels || []) {
+        if (channel.apiKey && !isSharedApiKeyPlaceholder(channel.apiKey)) {
+            localRealKeys.set(channel.id, channel.apiKey);
+        }
+    }
+
+    const channels = (Array.isArray(shared.channels) ? shared.channels : []).map((channel) => {
+        const created = createModelChannel(channel);
+        if (localRealKeys.has(created.id)) {
+            created.apiKey = localRealKeys.get(created.id)!;
+        }
+        return created;
+    });
     const merged: AiConfig = { ...defaultConfig, ...shared, channels };
 
     const config: AiConfig = {
