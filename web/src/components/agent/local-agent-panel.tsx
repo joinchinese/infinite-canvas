@@ -19,6 +19,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { modelOptionLabel, selectableModelsByCapability, useConfigStore } from "@/stores/use-config-store";
 import { useShallow } from "zustand/react/shallow";
+import { createBuiltinThreadId, deleteBuiltinThreads, getBuiltinThreadMessages, getBuiltinThreads, saveBuiltinThread } from "@/lib/agent/builtin-agent-history";
 import { runBuiltinAgentTurn, stopBuiltinAgent } from "@/lib/agent/builtin-agent-runner";
 import { useAgentStore, type AgentAttachment, type AgentBootstrapStatus, type AgentCanvasContext, type AgentCanvasReference, type AgentChatItem, type AgentConversationState, type AgentModel, type AgentPendingApproval, type AgentPendingToolCall, type AgentPermissionMode, type AgentReasoningEffort, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
@@ -365,6 +366,28 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         return true;
     }, [applyWorkspaceChange, setAgentState]);
     const loadThreads = useCallback(async (skipHistory = false, expectedTurnId = "") => {
+        const currentMode = useAgentStore.getState().agentMode;
+        if (currentMode === "builtin") {
+            setAgentState({ loadingThreads: true });
+            try {
+                const threads = await getBuiltinThreads();
+                setAgentState({ threads, workspacePath: "内置本地空间" });
+                const current = useAgentStore.getState();
+                const activeId = current.activeThreadId;
+                if (activeId && !skipHistory && current.messages.length === 0) {
+                    const messages = await getBuiltinThreadMessages(activeId);
+                    if (messages.length > 0) {
+                        setAgentState({ messages });
+                    }
+                }
+            } catch (error) {
+                addEventLog("读取历史失败", error);
+            } finally {
+                setAgentState({ loadingThreads: false });
+            }
+            return;
+        }
+
         if (!connectedRef.current && !useAgentStore.getState().connected) return;
         let sequence = ++loadThreadsSequenceRef.current;
         setAgentState({ loadingThreads: true });
@@ -755,10 +778,18 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         addMessage({ id: messageId, itemId: "synthetic:user", clientMessageId: messageId, threadId: requestThreadId, turnId: "", role: "user", text: userText, attachments: files, canvasReferences: messageReferences, skill: messageSkill });
 
         if (currentState.agentMode === "builtin") {
+            const threadId = currentBeforeSend.activeThreadId || createBuiltinThreadId();
+            if (!currentBeforeSend.activeThreadId) {
+                setAgentState({ activeThreadId: threadId });
+            }
             try {
                 await runBuiltinAgentTurn(requestPrompt, navigate, {
                     onActivity: (act) => setAgentState({ activity: act }),
                 });
+                const latestMessages = useAgentStore.getState().messages;
+                await saveBuiltinThread(threadId, latestMessages, userText);
+                const updatedThreads = await getBuiltinThreads();
+                setAgentState({ threads: updatedThreads });
             } catch (error) {
                 const errText = error instanceof Error ? error.message : "内置 Agent 执行失败";
                 addMessage({ role: "error", title: "执行失败", text: errText });
@@ -1121,7 +1152,13 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const startNewThread = async () => {
         const current = useAgentStore.getState();
         if (current.agentMode === "builtin") {
-            setAgentState({ messages: [], activeTab: "chat", activity: "就绪" });
+            const newThreadId = createBuiltinThreadId();
+            setAgentState({
+                activeThreadId: newThreadId,
+                messages: [],
+                activeTab: "chat",
+                activity: "就绪",
+            });
             message.success("已开启新会话");
             return;
         }
@@ -1147,6 +1184,16 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
 
     const resumeThread = async (threadId: string) => {
         const current = useAgentStore.getState();
+        if (current.agentMode === "builtin") {
+            const messages = await getBuiltinThreadMessages(threadId);
+            setAgentState({
+                activeThreadId: threadId,
+                messages,
+                activeTab: "chat",
+                activity: "就绪",
+            });
+            return;
+        }
         if (!current.connected || !threadId || current.sending || current.waiting || current.loadingThreads || ["preparing", "running"].includes(current.conversation.status)) return;
         const operation = beginThreadOperation();
         try {
@@ -1167,6 +1214,21 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
 
     const deleteThreads = async (threadIds: string[]) => {
         if (!connected || !threadIds.length || sending || waiting || loadingThreads) return;
+        const current = useAgentStore.getState();
+        if (current.agentMode === "builtin") {
+            try {
+                await deleteBuiltinThreads(threadIds);
+                if (threadIds.includes(current.activeThreadId)) {
+                    setAgentState({ activeThreadId: "", messages: [] });
+                }
+                const threads = await getBuiltinThreads();
+                setAgentState({ threads });
+                message.success(rt("recordsDeleted", { count: threadIds.length }));
+            } catch (error) {
+                message.error("删除会话失败");
+            }
+            return;
+        }
         const operation = beginThreadOperation();
         let deletedCount = 0;
         try {
