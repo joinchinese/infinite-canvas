@@ -14,7 +14,7 @@ import { nanoid } from "nanoid";
 import type { CanvasAgentOp, CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool, type SiteToolName } from "@/lib/agent/agent-site-tools";
 import { BUILTIN_AGENT_SYSTEM_PROMPT, BUILTIN_AGENT_TOOLS } from "@/lib/agent/builtin-agent-tools";
-import { buildApiUrl, resolveModelRequestConfig, useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, modelOptionLabel, resolveModelRequestConfig, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useAgentStore, type AgentChatItem } from "@/stores/use-agent-store";
 
 const MAX_AGENT_STEPS = 6;
@@ -64,29 +64,37 @@ export async function runBuiltinAgentTurn(
     const configState = useConfigStore.getState().config;
     const agentStore = useAgentStore.getState();
 
-    // 1. 获取文本模型配置
-    const targetModel = configState.textModel || configState.model;
+    // 1. 获取选中的思考/文本模型配置
+    const targetModel = agentStore.model || configState.textModel || configState.model;
     const requestConfig = resolveModelRequestConfig(configState, targetModel);
 
     if (!requestConfig.baseUrl.trim() || !requestConfig.apiKey.trim()) {
         throw new Error("当前未配置文本模型或渠道，请先在「配置与用户偏好」中添加可用渠道。");
     }
 
-    // 2. 准备中止控制器
+    // 2. 获取用户当前指定的生图模型
+    const selectedImageModel = agentStore.imageModel || configState.imageModel || configState.model;
+    const selectedImageModelLabel = modelOptionLabel(configState, selectedImageModel);
+
+    // 3. 准备中止控制器
     stopBuiltinAgent();
     const abortController = new AbortController();
     currentAbortController = abortController;
 
-    // 3. 构建初始消息上下文
+    // 4. 构建初始消息上下文
     const canvasContext = agentStore.canvasContext;
     const snapshot = canvasContext?.snapshot;
     const canvasSummary = snapshot
-        ? `\n\n【当前画布环境快照】\n- 项目标题: ${snapshot.title || "未命名画布"}\n- 节点数量: ${snapshot.nodes.length} 个（${snapshot.nodes.map((n) => `[${n.type}] ${n.title || n.id}`).join("、") || "空"}\n- 连线数量: ${snapshot.connections.length} 条`
+        ? `\n\n【当前画布环境快照】\n- 项目标题: ${snapshot.title || "未命名画布"}\n- 节点数量: ${snapshot.nodes.length} 个（${snapshot.nodes.map((n) => `[${n.type}] ${n.title || n.id}`).join("、") || "空"}）\n- 连线数量: ${snapshot.connections.length} 条`
         : "\n\n【当前没有已连接的画布】";
+
+    const imageModelPrompt = selectedImageModel
+        ? `\n\n【用户指定的生图模型】\n当前用户在面板中指定的绘图模型为: "${selectedImageModel}" (${selectedImageModelLabel})。\n当你创建生图配置节点（add_node, nodeType: "config"）时，必须在 metadata.model 中填入 "${selectedImageModel}"，确保使用该模型渲染。`
+        : "";
 
     const systemMessage: ChatMessage = {
         role: "system",
-        content: `${BUILTIN_AGENT_SYSTEM_PROMPT}${canvasSummary}`,
+        content: `${BUILTIN_AGENT_SYSTEM_PROMPT}${imageModelPrompt}${canvasSummary}`,
     };
 
     // 提取历史对话中最近的几轮纯对话（避免上下文过载）
@@ -203,7 +211,16 @@ export async function runBuiltinAgentTurn(
                         if (!currentCtx) {
                             toolOutput = JSON.stringify({ error: "当前没有已连接的画布上下文" });
                         } else {
-                            const ops = (parsedArgs.ops as CanvasAgentOp[]) || [];
+                            const rawOps = (parsedArgs.ops as CanvasAgentOp[]) || [];
+                            const ops = rawOps.map((op) => {
+                                if (op.type === "add_node" && (op.nodeType === "config" || !op.nodeType)) {
+                                    const meta = op.metadata || {};
+                                    if (!meta.model && selectedImageModel) {
+                                        return { ...op, metadata: { ...meta, model: selectedImageModel } };
+                                    }
+                                }
+                                return op;
+                            });
                             const updatedSnapshot = currentCtx.applyOps(ops);
                             toolOutput = JSON.stringify({
                                 success: true,

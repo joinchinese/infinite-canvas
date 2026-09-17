@@ -17,7 +17,7 @@ import { randomId } from "@/lib/utils";
 import { uploadImage } from "@/services/image-storage";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
-import { useConfigStore } from "@/stores/use-config-store";
+import { modelOptionLabel, selectableModelsByCapability, useConfigStore } from "@/stores/use-config-store";
 import { useShallow } from "zustand/react/shallow";
 import { runBuiltinAgentTurn, stopBuiltinAgent } from "@/lib/agent/builtin-agent-runner";
 import { useAgentStore, type AgentAttachment, type AgentBootstrapStatus, type AgentCanvasContext, type AgentCanvasReference, type AgentChatItem, type AgentConversationState, type AgentModel, type AgentPendingApproval, type AgentPendingToolCall, type AgentPermissionMode, type AgentReasoningEffort, type AgentThreadSummary } from "@/stores/use-agent-store";
@@ -136,7 +136,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     // canvasContext is intentionally excluded because project updates it every frame during dragging and resizing.
     // The panel uses it only for ref synchronization and debounced postState calls, never during rendering.
     // Subscribing here would rerender the panel every frame and amplify the #185 crash, so it is observed imperatively below.
-    const { width, url, token, connected, enabled, agentMode, prompt, attachments, sending, waiting, tokenUsage, eventLogs, threads, activeThreadId, workspacePath, loadingThreads, activeTab, confirmTools, permissionMode, models, model, reasoningEffort, activity, conversation, connectError, pendingTool, pendingApprovals } = useAgentStore(
+    const { width, url, token, connected, enabled, agentMode, prompt, attachments, sending, waiting, tokenUsage, eventLogs, threads, activeThreadId, workspacePath, loadingThreads, activeTab, confirmTools, permissionMode, models, model, imageModel, reasoningEffort, activity, conversation, connectError, pendingTool, pendingApprovals } = useAgentStore(
         useShallow((state) => ({
             width: state.width,
             url: state.url,
@@ -158,6 +158,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             permissionMode: state.permissionMode,
             models: state.models,
             model: state.model,
+            imageModel: state.imageModel,
             reasoningEffort: state.reasoningEffort,
             activity: state.activity,
             conversation: state.conversation,
@@ -196,23 +197,76 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
 
-    const builtinTextModel = useConfigStore((state) => state.config.textModel || state.config.model || "");
+    const globalConfig = useConfigStore((state) => state.config);
+
+    // 思考模型列表
     const effectiveModels = useMemo<AgentModel[]>(() => {
         if (agentMode === "builtin") {
-            return [
-                {
-                    id: "builtin-model",
-                    model: builtinTextModel || "default",
-                    displayName: builtinTextModel ? `内置 · ${builtinTextModel}` : "内置模型（未配置）",
-                    defaultReasoningEffort: "medium",
-                    supportedReasoningEfforts: [],
-                    isDefault: true,
-                },
-            ];
+            const textModelValues = selectableModelsByCapability(globalConfig, "text");
+            const candidateValues = textModelValues.length > 0
+                ? textModelValues
+                : [globalConfig.textModel || globalConfig.model].filter(Boolean);
+
+            if (!candidateValues.length) {
+                return [
+                    {
+                        id: "builtin-default",
+                        model: "default",
+                        displayName: "默认模型",
+                        defaultReasoningEffort: "medium",
+                        supportedReasoningEfforts: [],
+                        isDefault: true,
+                    },
+                ];
+            }
+
+            return candidateValues.map((val) => ({
+                id: val,
+                model: val,
+                displayName: modelOptionLabel(globalConfig, val),
+                defaultReasoningEffort: "medium",
+                supportedReasoningEfforts: [],
+                isDefault: val === (globalConfig.textModel || globalConfig.model),
+            }));
         }
         return models;
-    }, [agentMode, builtinTextModel, models]);
-    const effectiveModel = agentMode === "builtin" ? builtinTextModel || "default" : model;
+    }, [agentMode, globalConfig, models]);
+
+    const effectiveModel = useMemo(() => {
+        if (agentMode === "builtin") {
+            if (model && effectiveModels.some((m) => m.model === model)) return model;
+            return globalConfig.textModel || globalConfig.model || effectiveModels[0]?.model || "default";
+        }
+        return model;
+    }, [agentMode, effectiveModels, globalConfig.model, globalConfig.textModel, model]);
+
+    // 生图模型列表
+    const effectiveImageModels = useMemo<Array<{ model: string; displayName: string }>>(() => {
+        if (agentMode === "builtin") {
+            const imageModelValues = selectableModelsByCapability(globalConfig, "image");
+            const candidateValues = imageModelValues.length > 0
+                ? imageModelValues
+                : [globalConfig.imageModel || globalConfig.model].filter(Boolean);
+
+            if (!candidateValues.length) {
+                return [{ model: "default", displayName: "默认生图模型" }];
+            }
+
+            return candidateValues.map((val) => ({
+                model: val,
+                displayName: modelOptionLabel(globalConfig, val),
+            }));
+        }
+        return [];
+    }, [agentMode, globalConfig]);
+
+    const effectiveImageModel = useMemo(() => {
+        if (agentMode === "builtin") {
+            if (imageModel && effectiveImageModels.some((m) => m.model === imageModel)) return imageModel;
+            return globalConfig.imageModel || globalConfig.model || effectiveImageModels[0]?.model || "default";
+        }
+        return "";
+    }, [agentMode, effectiveImageModels, globalConfig.imageModel, globalConfig.model, imageModel]);
 
     useEffect(() => {
         let disposed = false;
@@ -1481,17 +1535,28 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                         models={effectiveModels}
                         model={effectiveModel}
                         reasoningEffort={reasoningEffort}
-                        onModelChange={(model) => {
-                            const selected = models.find((item) => item.model === model);
+                        onModelChange={(newModel) => {
+                            if (agentMode === "builtin") {
+                                localStorage.setItem("canvas-agent-model", newModel);
+                                setAgentState({ model: newModel });
+                                return;
+                            }
+                            const selected = models.find((item) => item.model === newModel);
                             if (!selected) return;
                             const effort = selected.defaultReasoningEffort || selected.supportedReasoningEfforts[0]?.reasoningEffort;
-                            localStorage.setItem("canvas-agent-model", model);
+                            localStorage.setItem("canvas-agent-model", newModel);
                             if (effort) localStorage.setItem("canvas-agent-reasoning-effort", effort);
-                            setAgentState({ model, ...(effort ? { reasoningEffort: effort } : {}) });
+                            setAgentState({ model: newModel, ...(effort ? { reasoningEffort: effort } : {}) });
                         }}
                         onReasoningEffortChange={(reasoningEffort) => {
                             localStorage.setItem("canvas-agent-reasoning-effort", reasoningEffort);
                             setAgentState({ reasoningEffort });
+                        }}
+                        imageModels={effectiveImageModels}
+                        imageModel={effectiveImageModel}
+                        onImageModelChange={(newImageModel) => {
+                            localStorage.setItem("canvas-agent-image-model", newImageModel);
+                            setAgentState({ imageModel: newImageModel });
                         }}
                         left={
                             attachments.length ? (

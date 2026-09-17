@@ -74,6 +74,7 @@ type AgentStore = {
     permissionMode: AgentPermissionMode;
     models: AgentModel[];
     model: string;
+    imageModel: string;
     reasoningEffort: AgentReasoningEffort | "";
     activity: string;
     conversation: AgentConversationState;
@@ -131,6 +132,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     permissionMode: typeof window === "undefined" ? "request" : (localStorage.getItem("canvas-agent-permission-mode") as AgentPermissionMode) || "request",
     models: [],
     model: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-model") || "",
+    imageModel: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-image-model") || "",
     reasoningEffort: typeof window === "undefined" ? "" : (localStorage.getItem("canvas-agent-reasoning-effort") as AgentReasoningEffort) || "",
     activity: i18n.t("agent.state.ready"),
     conversation: initialAgentMode === "builtin" ? { revision: 1, conversationId: "builtin", threadId: "builtin", status: "ready", mcpStatuses: {} } : { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} },
