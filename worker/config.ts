@@ -80,7 +80,7 @@ function channelsOf(raw: unknown): ChannelLike[] {
     });
 }
 
-/** 抹掉一切可能出现真实密钥的字段，换成占位符。 */
+/** 抹掉一切可能出现真实密钥的字段，换成占位符（供普通成员只读使用）。 */
 function sanitize(raw: unknown): Record<string, unknown> {
     const channels = channelsOf(raw);
     return {
@@ -92,12 +92,29 @@ function sanitize(raw: unknown): Record<string, unknown> {
     };
 }
 
+/** 管理员读取：从 channel_secrets 表取出各渠道的真实 API Key 回填，支持多设备无缝管理配置。 */
+function revealSecrets(raw: unknown, secretMap: Map<string, string>): Record<string, unknown> {
+    const channels = channelsOf(raw);
+    const firstKey = channels[0] ? (secretMap.get(channels[0].id) ?? "") : "";
+    return {
+        ...(raw as Record<string, unknown>),
+        apiKey: firstKey,
+        channels: channels.map((channel) => {
+            const realKey = secretMap.get(channel.id);
+            return {
+                ...channel,
+                apiKey: realKey !== undefined ? realKey : (isSharedApiKeyPlaceholder(channel.apiKey) ? "" : channel.apiKey),
+            };
+        }),
+    };
+}
+
 export async function handleConfig(request: Request, env: Env, secret: string): Promise<Response> {
     const method = request.method.toUpperCase();
     if (method === "GET") {
         const auth = await requireUser(request, env, secret);
         if (!auth.ok) return auth.response;
-        return readSharedConfig(env);
+        return readSharedConfig(env, auth.user.role === "admin");
     }
     if (method === "PUT") {
         const auth = await requireAdmin(request, env, secret);
@@ -111,7 +128,7 @@ export async function handleConfig(request: Request, env: Env, secret: string): 
 // 读取
 // ---------------------------------------------------------------------------
 
-async function readSharedConfig(env: Env): Promise<Response> {
+async function readSharedConfig(env: Env, isAdmin: boolean): Promise<Response> {
     const row = await env.DB.prepare("SELECT value_json, updated_at FROM app_config WHERE config_key = ?1")
         .bind(SHARED_CONFIG_KEY)
         .first<{ value_json: string; updated_at: number }>();
@@ -119,9 +136,11 @@ async function readSharedConfig(env: Env): Promise<Response> {
     const stored = row ? (parseJson(row.value_json) as Record<string, unknown> | null) : null;
     if (!stored) return jsonResponse({ config: null, updatedAt: null, missingSecrets: [] });
 
-    const config = sanitize(stored);
-    const secrets = await env.DB.prepare("SELECT channel_id FROM channel_secrets").all<{ channel_id: string }>();
-    const withSecret = new Set((secrets.results ?? []).map((item) => item.channel_id));
+    const secretRows = await env.DB.prepare("SELECT channel_id, api_key FROM channel_secrets").all<{ channel_id: string; api_key: string }>();
+    const secretMap = new Map((secretRows.results ?? []).map((item) => [item.channel_id, item.api_key]));
+
+    const config = isAdmin ? revealSecrets(stored, secretMap) : sanitize(stored);
+    const withSecret = new Set(secretMap.keys());
     const missingSecrets = channelsOf(config)
         .map((channel) => channel.id)
         .filter((id) => !withSecret.has(id));

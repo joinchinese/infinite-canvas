@@ -279,9 +279,8 @@ async function main() {
             await page.waitForTimeout(500);
         }
         record("发布后服务端已存下共享配置", Boolean(sharedSeenByAdmin?.config), sharedSeenByAdmin ? "" : "等待 10s 仍未写入");
-        record("服务端记录的渠道 apiKey 是占位符（带渠道 id）", sharedSeenByAdmin?.config?.channels?.[0]?.apiKey === "via-proxy:ch-e2e", String(sharedSeenByAdmin?.config?.channels?.[0]?.apiKey));
+        record("管理员读取共享配置能拿到真实 Key（支持多设备协同管理）", sharedSeenByAdmin?.config?.channels?.[0]?.apiKey === (LIVE_MODE ? LIVE_KEY : REAL_KEY), String(sharedSeenByAdmin?.config?.channels?.[0]?.apiKey));
         record("服务端保留的渠道数与发布的一致", sharedSeenByAdmin?.config?.channels?.length === (LIVE_MODE ? 1 : 2), String(sharedSeenByAdmin?.config?.channels?.length));
-        record("服务端响应里没有真实 Key", !JSON.stringify(sharedSeenByAdmin ?? {}).includes(REAL_KEY));
         record("面板显示了最后发布时间", await page.getByText(/最后发布时间/).isVisible().catch(() => false));
 
         // ---------------------------------------------------------------
@@ -303,7 +302,7 @@ async function main() {
             await page.waitForTimeout(500);
         }
         record("管理员改配置后自动同步到服务端（没点发布按钮）", autoSynced?.config?.systemPrompt === AUTO_SYNC_PROMPT, String(autoSynced?.config?.systemPrompt));
-        record("自动同步的响应里依然没有真实 Key", !JSON.stringify(autoSynced ?? {}).includes(REAL_KEY));
+        record("管理员自动同步后读取仍保持真实 Key", autoSynced?.config?.channels?.[0]?.apiKey === (LIVE_MODE ? LIVE_KEY : REAL_KEY));
         record("配置界面显示了同步状态", await page.getByText(/已同步给成员|正在同步|有改动待同步/).first().isVisible().catch(() => false));
 
         // ---------------------------------------------------------------

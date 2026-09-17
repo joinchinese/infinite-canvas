@@ -420,11 +420,11 @@ async function main() {
 
     const sharedForAdmin = await configAdmin.get("/api/config");
     const sharedForMember = await configMember.get("/api/config");
-    record("管理员自己也能读到共享配置", Boolean(sharedForAdmin.payload?.config));
+    record("管理员自己能读到包含真实 Key 的共享配置", sharedForAdmin.payload?.config?.channels?.[0]?.apiKey === REAL_KEY);
     record("普通用户能读到共享配置", Boolean(sharedForMember.payload?.config));
-    record("响应里完全不出现真实 Key", !JSON.stringify(sharedForMember.payload).includes(REAL_KEY));
-    record("渠道 apiKey 已换成占位符（带渠道 id，供代理层定位密钥）", sharedForMember.payload?.config?.channels?.[0]?.apiKey === "via-proxy:ch-1", String(sharedForMember.payload?.config?.channels?.[0]?.apiKey));
-    record("顶层历史 apiKey 字段同样被抹掉（沿用首个渠道的 id）", sharedForMember.payload?.config?.apiKey === "via-proxy:ch-1", String(sharedForMember.payload?.config?.apiKey));
+    record("普通用户响应里完全不出现真实 Key", !JSON.stringify(sharedForMember.payload).includes(REAL_KEY));
+    record("普通用户的渠道 apiKey 已换成占位符（带渠道 id，供代理层定位密钥）", sharedForMember.payload?.config?.channels?.[0]?.apiKey === "via-proxy:ch-1", String(sharedForMember.payload?.config?.channels?.[0]?.apiKey));
+    record("普通用户的顶层历史 apiKey 字段同样被抹掉（沿用首个渠道的 id）", sharedForMember.payload?.config?.apiKey === "via-proxy:ch-1", String(sharedForMember.payload?.config?.apiKey));
     record("baseUrl 保持真实上游地址（代理要靠它解析目标）", sharedForMember.payload?.config?.channels?.[0]?.baseUrl === "https://api.example.com");
     record("模型列表原样下发", sharedForMember.payload?.config?.channels?.[0]?.models?.length === 1);
     record("其它偏好（systemPrompt）原样下发", sharedForMember.payload?.config?.systemPrompt === "shared system prompt");

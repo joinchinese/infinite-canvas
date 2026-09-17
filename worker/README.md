@@ -17,7 +17,7 @@
 | `index.ts` | 入口与路由分发；未匹配的请求交回静态资源 |
 | `auth.ts` | 会话签发/校验，`/api/auth/*` 四个接口 |
 | `members.ts` | 成员 CRUD（仅管理员） |
-| `config.ts` | 共享配置读写：真实 Key 落 `channel_secrets`，下发时替换为带渠道 id 的占位符（仅管理员可写） |
+| `config.ts` | 共享配置读写：真实 Key 落 `channel_secrets`；管理员下发真实 Key，普通用户下发带渠道 id 的占位符（仅管理员可写） |
 | `proxy.ts` | 代理转发 + 真实 Key 注入（`/<完整目标URL>`）；SSE 流式透传 |
 | `password.ts` | 密码派生规则常量与校验值计算 |
 | `crypto.ts` | base64url、HMAC-SHA256、常量时间比较 |

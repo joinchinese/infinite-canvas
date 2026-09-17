@@ -101,7 +101,9 @@ export function applySharedConfig(shared: AiConfig, origin: string = window.loca
 
     const channels = (Array.isArray(shared.channels) ? shared.channels : []).map((channel) => {
         const created = createModelChannel(channel);
-        if (localRealKeys.has(created.id)) {
+        // 若云端下发的是脱敏占位符或空值，但本地保留有真实 Key，则继承本地真实 Key；
+        // 若云端本身下发了真实 Key（管理员身份读取），则直接采用云端权威最新值。
+        if ((!created.apiKey || isSharedApiKeyPlaceholder(created.apiKey)) && localRealKeys.has(created.id)) {
             created.apiKey = localRealKeys.get(created.id)!;
         }
         return created;
@@ -111,6 +113,7 @@ export function applySharedConfig(shared: AiConfig, origin: string = window.loca
     const config: AiConfig = {
         ...merged,
         channelMode: "local",
+        apiKey: channels[0]?.apiKey || merged.apiKey,
         channels,
         models: modelOptionsFromChannels(channels),
         model: normalizeModelOptionValue(merged.model, channels) || merged.model,
