@@ -17,7 +17,9 @@ import { randomId } from "@/lib/utils";
 import { uploadImage } from "@/services/image-storage";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
+import { useConfigStore } from "@/stores/use-config-store";
 import { useShallow } from "zustand/react/shallow";
+import { runBuiltinAgentTurn, stopBuiltinAgent } from "@/lib/agent/builtin-agent-runner";
 import { useAgentStore, type AgentAttachment, type AgentBootstrapStatus, type AgentCanvasContext, type AgentCanvasReference, type AgentChatItem, type AgentConversationState, type AgentModel, type AgentPendingApproval, type AgentPendingToolCall, type AgentPermissionMode, type AgentReasoningEffort, type AgentThreadSummary } from "@/stores/use-agent-store";
 import { type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import { isSiteTool, runSiteTool } from "@/lib/agent/agent-site-tools";
@@ -134,7 +136,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     // canvasContext is intentionally excluded because project updates it every frame during dragging and resizing.
     // The panel uses it only for ref synchronization and debounced postState calls, never during rendering.
     // Subscribing here would rerender the panel every frame and amplify the #185 crash, so it is observed imperatively below.
-    const { width, url, token, connected, enabled, prompt, attachments, sending, waiting, tokenUsage, eventLogs, threads, activeThreadId, workspacePath, loadingThreads, activeTab, confirmTools, permissionMode, models, model, reasoningEffort, activity, conversation, connectError, pendingTool, pendingApprovals } = useAgentStore(
+    const { width, url, token, connected, enabled, agentMode, prompt, attachments, sending, waiting, tokenUsage, eventLogs, threads, activeThreadId, workspacePath, loadingThreads, activeTab, confirmTools, permissionMode, models, model, reasoningEffort, activity, conversation, connectError, pendingTool, pendingApprovals } = useAgentStore(
         useShallow((state) => ({
             width: state.width,
             url: state.url,
@@ -162,6 +164,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             connectError: state.connectError,
             pendingTool: state.pendingTool,
             pendingApprovals: state.pendingApprovals,
+            agentMode: state.agentMode,
         })),
     );
     const setAgentState = useAgentStore((state) => state.setAgentState);
@@ -192,6 +195,25 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const threadOperationSequenceRef = useRef(0);
     const endpoint = useMemo(() => url.trim().replace(/\/$/, ""), [url]);
     const urlAgentAutoConnect = searchParams.has("agentUrl") && searchParams.has("agentToken");
+
+    const builtinTextModel = useConfigStore((state) => state.config.textModel || state.config.model || "");
+    const effectiveModels = useMemo<AgentModel[]>(() => {
+        if (agentMode === "builtin") {
+            return [
+                {
+                    id: "builtin-model",
+                    model: builtinTextModel || "default",
+                    displayName: builtinTextModel ? `内置 · ${builtinTextModel}` : "内置模型（未配置）",
+                    defaultReasoningEffort: "medium",
+                    supportedReasoningEfforts: [],
+                    isDefault: true,
+                },
+            ];
+        }
+        return models;
+    }, [agentMode, builtinTextModel, models]);
+    const effectiveModel = agentMode === "builtin" ? builtinTextModel || "default" : model;
+
     useEffect(() => {
         let disposed = false;
         void acquireAgentClientId().then((clientId) => {
@@ -322,7 +344,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         const unsubscribe = useAgentStore.subscribe((state) => {
             if (state.canvasContext === canvasContextRef.current) return;
             canvasContextRef.current = state.canvasContext;
-            if (!useAgentStore.getState().connected) return;
+            if (state.agentMode === "builtin" || !useAgentStore.getState().connected) return;
             if (timer) clearTimeout(timer);
             timer = setTimeout(() => void postState(endpoint, token, clientIdRef.current, canvasContextRef.current?.snapshot || null), 300);
         });
@@ -340,6 +362,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     useEffect(() => () => attachmentUrlsRef.current.forEach((url) => URL.revokeObjectURL(url)), []);
 
     useEffect(() => {
+        if (agentMode === "builtin") return;
         if (!clientReady || !enabled || !token.trim()) return;
         localStorage.setItem("canvas-agent-url", endpoint);
         localStorage.setItem("canvas-agent-token", token);
@@ -581,15 +604,17 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     }, [applyConversationState, applyWorkspaceChange, clientReady, enabled, endpoint, loadSkills, loadThreads, message, setAgentState, token]);
 
     useEffect(() => {
-        if (connected) void loadThreads();
-    }, [connected, loadThreads]);
+        if (agentMode === "builtin" || !connected) return;
+        void loadThreads();
+    }, [agentMode, connected, loadThreads]);
 
     useEffect(() => {
-        if (connected) void loadSkills(endpoint, token);
-    }, [connected, endpoint, loadSkills, token]);
+        if (agentMode === "builtin" || !connected) return;
+        void loadSkills(endpoint, token);
+    }, [agentMode, connected, endpoint, loadSkills, token]);
 
     useEffect(() => {
-        if (!connected) return;
+        if (agentMode === "builtin" || !connected) return;
         void fetchAgentJson<AgentModelsResponse>(endpoint, token, "/agent/codex/models").then(({ data = [] }) => {
             const names = new Set<string>();
             const models = data.flatMap((item) => {
@@ -613,7 +638,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     }, [connected, endpoint, setAgentState, token]);
 
     useEffect(() => {
-        if (!connected) return;
+        if (agentMode === "builtin" || !connected) return;
         const activate = () => void activateAgentClient(endpoint, token, clientIdRef.current);
         const activateVisible = () => {
             if (document.visibilityState === "visible") activate();
@@ -674,6 +699,22 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         const requestThreadId = currentBeforeSend.activeThreadId;
         setAgentState({ prompt: "", attachments: [], canvasReferences: [], activity: rt("sending"), sending: true, loadingThreads: false, activeTurnId: "", messages: currentBeforeSend.messages });
         addMessage({ id: messageId, itemId: "synthetic:user", clientMessageId: messageId, threadId: requestThreadId, turnId: "", role: "user", text: userText, attachments: files, canvasReferences: messageReferences, skill: messageSkill });
+
+        if (currentState.agentMode === "builtin") {
+            try {
+                await runBuiltinAgentTurn(requestPrompt, navigate, {
+                    onActivity: (act) => setAgentState({ activity: act }),
+                });
+            } catch (error) {
+                const errText = error instanceof Error ? error.message : "内置 Agent 执行失败";
+                addMessage({ role: "error", title: "执行失败", text: errText });
+                message.error(errText);
+            } finally {
+                setAgentState({ sending: false, waiting: false, activity: "就绪" });
+            }
+            return;
+        }
+
         let threadId = requestThreadId;
         try {
             const messageAttachments = await Promise.all(files.map(createMessageAttachmentMetadata));
@@ -741,6 +782,11 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     };
 
     const stopTurn = async () => {
+        if (useAgentStore.getState().agentMode === "builtin") {
+            stopBuiltinAgent();
+            setAgentState({ activity: "就绪", sending: false, waiting: false });
+            return;
+        }
         if (!connected || (!sending && !waiting)) return;
         setAgentState({ activity: rt("stopping") });
         try {
@@ -971,6 +1017,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     }, [confirmTools, setAgentState, urlAgentAutoConnect]);
 
     useEffect(() => {
+        if (agentMode === "builtin") return;
         if ((!autoConnect && !urlAgentAutoConnect) || autoConnectRef.current || enabled || connected) return;
         autoConnectRef.current = true;
         void toggleAgentConnection({ silent: true });
@@ -1019,6 +1066,11 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
 
     const startNewThread = async () => {
         const current = useAgentStore.getState();
+        if (current.agentMode === "builtin") {
+            setAgentState({ messages: [], activeTab: "chat", activity: "就绪" });
+            message.success("已开启新会话");
+            return;
+        }
         if (!current.connected || current.sending || current.waiting || current.loadingThreads || ["preparing", "running"].includes(current.conversation.status)) return;
         const operation = beginThreadOperation();
         clearSkillSelection();
@@ -1313,8 +1365,12 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         setAgentState({ messages: currentMessages.map((message, itemIndex) => itemIndex === index ? { ...message, text: isDelta ? `${message.text}${text}` : mergeStreamText(message.text, text) } : message) });
     };
 
-    const connectionStatus = t(connectError ? "agent.status.failed" : connected ? "agent.status.connected" : enabled ? "agent.status.connecting" : "agent.status.disconnected");
-    const connectionStatusColor = connectError ? "#dc2626" : connected ? "#16a34a" : enabled ? "#d97706" : theme.node.muted;
+    const connectionStatus = agentMode === "builtin"
+        ? "内置 Agent"
+        : t(connectError ? "agent.status.failed" : connected ? "agent.status.connected" : enabled ? "agent.status.connecting" : "agent.status.disconnected");
+    const connectionStatusColor = agentMode === "builtin"
+        ? "#16a34a"
+        : connectError ? "#dc2626" : connected ? "#16a34a" : enabled ? "#d97706" : theme.node.muted;
     const content = (
         <>
             <AgentPanelTabs
@@ -1403,13 +1459,15 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                     <AgentChatComposer
                         prompt={prompt}
                         attachments={attachments.map((attachment) => agentAttachmentToChatAttachment(attachment, endpoint, token))}
-                        disabled={!connected || !conversationReady || loadingThreads}
+                        disabled={agentMode === "builtin" ? (sending || waiting) : (!connected || !conversationReady || loadingThreads)}
                         sending={sending || waiting}
-                        placeholder={conversation.status === "idle" || conversation.status === "preparing"
-                            ? t("agent.panel.mcpInitializing")
-                            : conversation.status === "failed"
-                                ? t("agent.panel.initFailed")
-                                : t("agent.panel.placeholder")}
+                        placeholder={agentMode === "builtin"
+                            ? "向内置 Agent 发送指令，例如：生成一组二次元风景提示词并连线到生图节点..."
+                            : conversation.status === "idle" || conversation.status === "preparing"
+                                ? t("agent.panel.mcpInitializing")
+                                : conversation.status === "failed"
+                                    ? t("agent.panel.initFailed")
+                                    : t("agent.panel.placeholder")}
                         theme={theme}
                         onPromptChange={(prompt) => setAgentState({ prompt })}
                         onSubmit={sendPrompt}
@@ -1420,8 +1478,8 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                         onConfirmToolsChange={(confirmTools) => setAgentState({ confirmTools })}
                         permissionMode={permissionMode}
                         onPermissionModeChange={changePermissionMode}
-                        models={models}
-                        model={model}
+                        models={effectiveModels}
+                        model={effectiveModel}
                         reasoningEffort={reasoningEffort}
                         onModelChange={(model) => {
                             const selected = models.find((item) => item.model === model);

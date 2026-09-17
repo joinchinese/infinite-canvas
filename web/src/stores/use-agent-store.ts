@@ -38,6 +38,7 @@ export type AgentConversationState = {
     error?: string;
 };
 export type AgentPanelTab = "chat" | "setup" | "history" | "skills" | "log";
+export type AgentRunningMode = "builtin" | "local";
 
 const CONNECT_TIMEOUT_MS = 6000;
 let agentSource: EventSource | null = null;
@@ -81,7 +82,9 @@ type AgentStore = {
     connectError: string;
     pendingTool: AgentPendingToolCall | null;
     pendingApprovals: AgentPendingApproval[];
-    setAgentState: (patch: Partial<Omit<AgentStore, "setAgentState" | "connectAgent" | "disconnectAgent" | "addMessage" | "addEventLog" | "clearEventLogs" | "openPanel" | "closePanel" | "togglePanel" | "setCanvasContext">>) => void;
+    agentMode: AgentRunningMode;
+    setAgentMode: (mode: AgentRunningMode) => void;
+    setAgentState: (patch: Partial<Omit<AgentStore, "setAgentState" | "connectAgent" | "disconnectAgent" | "addMessage" | "addEventLog" | "clearEventLogs" | "openPanel" | "closePanel" | "togglePanel" | "setCanvasContext" | "setAgentMode">>) => void;
     openPanel: () => void;
     closePanel: () => void;
     togglePanel: () => void;
@@ -95,16 +98,19 @@ type AgentStore = {
 
 export const CANVAS_AGENT_PANEL_MOTION_MS = 500;
 
+const initialAgentMode: AgentRunningMode = typeof window === "undefined" ? "builtin" : (localStorage.getItem("canvas-agent-mode") as AgentRunningMode) || "builtin";
+
 export const useAgentStore = create<AgentStore>((set, get) => ({
     width: typeof window === "undefined" ? 440 : Number(localStorage.getItem("canvas-agent-panel-width")) || 440,
     panelOpen: false,
     panelMounted: true,
     panelClosing: false,
     canvasContext: null,
+    agentMode: initialAgentMode,
     url: typeof window === "undefined" ? "http://127.0.0.1:17371" : localStorage.getItem("canvas-agent-url") || "http://127.0.0.1:17371",
     token: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-token") || "",
-    connected: false,
-    enabled: false,
+    connected: initialAgentMode === "builtin",
+    enabled: initialAgentMode === "builtin",
     silentConnect: false,
     fragmentBootstrap: false,
     prompt: "",
@@ -120,19 +126,42 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     activeTurnId: "",
     workspacePath: "",
     loadingThreads: false,
-    activeTab: "setup",
+    activeTab: initialAgentMode === "builtin" ? "chat" : "setup",
     confirmTools: false,
     permissionMode: typeof window === "undefined" ? "request" : (localStorage.getItem("canvas-agent-permission-mode") as AgentPermissionMode) || "request",
     models: [],
     model: typeof window === "undefined" ? "" : localStorage.getItem("canvas-agent-model") || "",
     reasoningEffort: typeof window === "undefined" ? "" : (localStorage.getItem("canvas-agent-reasoning-effort") as AgentReasoningEffort) || "",
     activity: i18n.t("agent.state.ready"),
-    conversation: { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} },
+    conversation: initialAgentMode === "builtin" ? { revision: 1, conversationId: "builtin", threadId: "builtin", status: "ready", mcpStatuses: {} } : { revision: 0, conversationId: "", threadId: "", status: "idle", mcpStatuses: {} },
     bootstrapStatus: null,
     mcpStartupStatuses: {},
     connectError: "",
     pendingTool: null,
     pendingApprovals: [],
+    setAgentMode: (mode) => {
+        localStorage.setItem("canvas-agent-mode", mode);
+        if (mode === "builtin") {
+            agentSource?.close();
+            agentSource = null;
+            if (connectTimer) clearTimeout(connectTimer);
+            connectTimer = null;
+            set({
+                agentMode: mode,
+                connected: true,
+                enabled: true,
+                activeTab: "chat",
+                activity: i18n.t("agent.state.ready"),
+                conversation: { revision: 1, conversationId: "builtin", threadId: "builtin", status: "ready", mcpStatuses: {} },
+                connectError: "",
+            });
+        } else {
+            get().disconnectAgent({
+                agentMode: mode,
+                activeTab: "setup",
+            });
+        }
+    },
     setAgentState: (patch) => set(patch),
     openPanel: () => set({ panelOpen: true, panelMounted: true, panelClosing: false }),
     closePanel: () => {
