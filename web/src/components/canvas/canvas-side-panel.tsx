@@ -1,7 +1,7 @@
 import { memo, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Empty, Input, Popconfirm, Select, Spin, Tag } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, ListChecks, Music2, Plus, Search, Settings2, Square, Trash2, Type, Video } from "lucide-react";
+import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, ListChecks, Music2, Plus, Search, Settings2, Sparkles, Square, Trash2, Type, Video } from "lucide-react";
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 
@@ -15,6 +15,7 @@ import { uploadMediaFile } from "@/services/file-storage";
 import { previewUrlFor, subscribeImagePreviews, getImagePreviewRevision, uploadImage } from "@/services/image-storage";
 import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
+import { useMyPromptStore } from "@/stores/use-my-prompt-store";
 import { CANVAS_SIDE_PANEL_MAX_WIDTH, CANVAS_SIDE_PANEL_MIN_WIDTH, CANVAS_SIDE_PANEL_MOTION_MS, useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
@@ -474,6 +475,14 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ onInsert, theme }: { o
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [detail, setDetail] = useState<Prompt | null>(null);
 
+    const myPrompts = useMyPromptStore((state) => state.prompts);
+    const [myExpanded, setMyExpanded] = useState(true);
+    const filteredMyPrompts = useMemo(() => {
+        const q = keyword.trim().toLowerCase();
+        if (!q) return myPrompts;
+        return myPrompts.filter((item) => [item.title, item.prompt, ...(item.tags || [])].join(" ").toLowerCase().includes(q));
+    }, [myPrompts, keyword]);
+
     const copyPrompt = async (prompt: string) => {
         try {
             await navigator.clipboard.writeText(prompt);
@@ -490,6 +499,57 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ onInsert, theme }: { o
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
                 <div className="space-y-1">
+                    {/* 我的自定义提示词分组 */}
+                    <div>
+                        <button
+                            type="button"
+                            onClick={() => setMyExpanded((prev) => !prev)}
+                            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-xs font-semibold opacity-85 transition hover:opacity-100"
+                        >
+                            <ChevronRight className={cn("size-3.5 transition-transform", (myExpanded || !!keyword.trim()) && "rotate-90")} />
+                            <Sparkles className="size-3.5 text-amber-500" />
+                            <span className="min-w-0 flex-1 truncate">我的提示词</span>
+                            <span className="opacity-50">{filteredMyPrompts.length}</span>
+                        </button>
+                        {(myExpanded || !!keyword.trim()) ? (
+                            <div className="space-y-1 px-1 pb-2 pt-1">
+                                {filteredMyPrompts.length ? (
+                                    filteredMyPrompts.map((item) => (
+                                        <div
+                                            key={item.id}
+                                            className="group flex items-center justify-between gap-2 rounded-lg border border-stone-200/80 bg-stone-50/50 px-2 py-1.5 transition hover:border-stone-400 dark:border-stone-800 dark:bg-stone-900/40"
+                                        >
+                                            <div className="min-w-0 flex-1">
+                                                <div className="truncate text-xs font-medium text-stone-800 dark:text-stone-200">{item.title}</div>
+                                                <div className="truncate text-[11px] text-stone-500">{item.prompt}</div>
+                                            </div>
+                                            <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                                                <button
+                                                    type="button"
+                                                    title="插入到画布"
+                                                    onClick={() => onInsert({ kind: "text", content: item.prompt, title: item.title })}
+                                                    className="grid size-6 place-items-center rounded bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20"
+                                                >
+                                                    <Plus className="size-3.5" />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    title="复制提示词"
+                                                    onClick={() => void copyPrompt(item.prompt)}
+                                                    className="grid size-6 place-items-center rounded bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20"
+                                                >
+                                                    <BookOpen className="size-3" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="py-2 text-center text-xs text-stone-400">暂无自定义提示词</div>
+                                )}
+                            </div>
+                        ) : null}
+                    </div>
+
                     {enabledSources.length ? enabledSources.map((source) => (
                         <PromptSourceGroup
                             key={source.id}

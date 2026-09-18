@@ -78,7 +78,8 @@ async function webdavFetch(config: WebdavSyncConfig, path: string, init: Request
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), WEBDAV_REQUEST_TIMEOUT_MS);
     try {
-        const url = withLocalProxy(buildWebdavUrl(config, path));
+        const rawUrl = buildWebdavUrl(config, path);
+        const url = config.useProxy ? withLocalProxy(rawUrl) : rawUrl;
         return await fetch(url, { ...init, headers, signal: controller.signal });
     } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw new Error(webdavText("requestTimeout"));

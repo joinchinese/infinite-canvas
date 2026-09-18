@@ -1,4 +1,4 @@
-import { App, Button, Form, Input, Modal, Progress, Select, Tabs } from "antd";
+import { App, Button, Form, Input, Modal, Progress, Select, Switch, Tabs } from "antd";
 import type { TFunction } from "i18next";
 import { Cloud, Download, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, Upload, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -303,11 +303,14 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                         <Form.Item label={t("config.webdav.directory")} extra={t("config.webdav.directoryDescription", { manifest: WEBDAV_MANIFEST_FILE_NAME })} className="mb-4">
                                             <Input value={webdav.directory} placeholder="infinite-canvas" onChange={(event) => updateWebdavConfig("directory", event.target.value)} />
                                         </Form.Item>
-                                        <Form.Item label={t("config.webdav.username")} className="mb-0">
+                                        <Form.Item label={t("config.webdav.username")} className="mb-4">
                                             <Input value={webdav.username} autoComplete="username" onChange={(event) => updateWebdavConfig("username", event.target.value)} />
                                         </Form.Item>
-                                        <Form.Item label={t("config.webdav.password")} className="mb-0">
+                                        <Form.Item label={t("config.webdav.password")} className="mb-4">
                                             <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
+                                        </Form.Item>
+                                        <Form.Item label="通过代理转发" extra="默认直连速度最快。自建隧道或支持跨域的 WebDAV 建议关闭；仅在无法直连或跨域失败时开启" className="mb-0 md:col-span-2">
+                                            <Switch checked={Boolean(webdav.useProxy)} onChange={(checked) => updateWebdavConfig("useProxy", checked)} />
                                         </Form.Item>
                                     </div>
                                     <div className="mt-4 flex flex-wrap items-center gap-2">
