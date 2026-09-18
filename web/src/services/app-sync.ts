@@ -3,7 +3,7 @@ import localforage from "localforage";
 import i18n from "@/i18n";
 import { getMediaBlob, resolveMediaUrl, setMediaBlob } from "@/services/file-storage";
 import { getImageBlob, resolveImageUrl, setImageBlob } from "@/services/image-storage";
-import { downloadWebdavFile, uploadWebdavFile, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
+import { downloadWebdavFile, listWebdavDirectoryFiles, uploadWebdavFile, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import type { Asset } from "@/stores/use-asset-store";
 import { useAssetStore } from "@/stores/use-asset-store";
 import type { WebdavSyncConfig } from "@/stores/use-config-store";
@@ -269,6 +269,10 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
     let uploadedFiles = 0;
     let uploadedBytes = 0;
 
+    // 预先探测远端 files/ 目录下已有的物理文件（断点秒传：远端已存在且大小一致的文件永不重复上传）
+    const filesDir = domainPath(domain, "files");
+    const existingRemoteFiles = await listWebdavDirectoryFiles(config, filesDir);
+
     const storageKeys = collectStorageKeys(data);
     let scanned = 0;
     for (const storageKey of storageKeys) {
@@ -280,14 +284,20 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
             emitProgress(onProgress, { domain, label: domainLabel(domain), stage: "检查本地媒体", current: scanned, total: storageKeys.length, status: "active" });
             continue;
         }
+        const fileName = `${safeFileName(storageKey)}.${fileExtension(blob.type, storageKey)}`;
+        const filePath = domainPath(domain, `files/${fileName}`);
         const item: AppSyncFile = {
             storageKey,
-            path: remoteFile?.path || domainPath(domain, `files/${safeFileName(storageKey)}.${fileExtension(blob.type, storageKey)}`),
+            path: remoteFile?.path || filePath,
             mimeType: blob.type || remoteFile?.mimeType || "application/octet-stream",
             bytes: blob.size,
         };
         files.push(item);
-        if (!remoteFile || remoteFile.bytes !== blob.size) tasks.push({ item, blob });
+        const isMatchedInManifest = Boolean(remoteFile && remoteFile.bytes === blob.size);
+        const isMatchedOnServer = existingRemoteFiles.get(fileName) === blob.size;
+        if (!isMatchedInManifest && !isMatchedOnServer) {
+            tasks.push({ item, blob });
+        }
         scanned += 1;
         emitProgress(onProgress, { domain, label: domainLabel(domain), stage: "检查本地媒体", current: scanned, total: storageKeys.length, status: "active" });
     }

@@ -90,6 +90,37 @@ async function webdavDirectoryExists(config: WebdavSyncConfig, path: string) {
     return response.ok || response.status === 207;
 }
 
+/**
+ * 列出远端目录下已有的物理文件及其大小（字节数）。
+ * 用于同步前的增量断点比对，已存在且大小相同的文件自动秒级跳过，杜绝重复大文件上传。
+ */
+export async function listWebdavDirectoryFiles(config: WebdavSyncConfig, path: string): Promise<Map<string, number>> {
+    const fileSizes = new Map<string, number>();
+    try {
+        const response = await webdavFetch(config, path, { method: "PROPFIND", headers: { Depth: "1" } });
+        if (!response.ok && response.status !== 207) return fileSizes;
+        const xml = await response.text();
+        const responseBlocks = xml.split(/<\/[^:]*:response>/i);
+        for (const block of responseBlocks) {
+            if (!block.trim()) continue;
+            // 目录自身排除
+            if (/<[^:]*:collection\s*\/?>/i.test(block)) continue;
+            const nameMatch = block.match(/<[^:]*:displayname[^>]*>([^<]+)<\/[^:]*:displayname>/i);
+            const lenMatch = block.match(/<[^:]*:getcontentlength[^>]*>(\d+)<\/[^:]*:getcontentlength>/i);
+            if (nameMatch && lenMatch) {
+                const name = nameMatch[1].trim();
+                const size = parseInt(lenMatch[1].trim(), 10);
+                if (name && !Number.isNaN(size)) {
+                    fileSizes.set(name, size);
+                }
+            }
+        }
+    } catch {
+        // 探测失败时静默返回空 Map，平滑降级为常规流程
+    }
+    return fileSizes;
+}
+
 async function webdavFetch(config: WebdavSyncConfig, path: string, init: RequestInit) {
     const headers = new Headers(init.headers);
     const username = (config.username || "").trim();
