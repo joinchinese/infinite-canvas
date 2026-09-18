@@ -2,7 +2,7 @@ import i18n from "@/i18n";
 import { withLocalProxy, type WebdavSyncConfig } from "@/stores/use-config-store";
 
 export const WEBDAV_MANIFEST_FILE_NAME = "manifest.json";
-const WEBDAV_REQUEST_TIMEOUT_MS = 120000;
+const WEBDAV_REQUEST_TIMEOUT_MS = 300000;
 const ensuredDirectories = new Set<string>();
 const webdavText = (key: string, options?: Record<string, unknown>) => i18n.t(`config.webdav.errors.${key}`, options);
 
@@ -35,17 +35,27 @@ export async function uploadWebdavFile(config: WebdavSyncConfig, path: string, f
     await ensureWebdavDirectory(config);
     await ensureWebdavSubdirectory(config, path);
     let response: Response | null = null;
+    let lastError: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
-        response = await webdavFetch(config, path, {
-            method: "PUT",
-            headers: { "Content-Type": contentType },
-            body: file,
-        });
-        if (response.status !== 423) {
-            break;
+        try {
+            response = await webdavFetch(config, path, {
+                method: "PUT",
+                headers: { "Content-Type": contentType },
+                body: file,
+            });
+            if (response.status !== 423) {
+                break;
+            }
+            // 如果遇到 423 Locked，等待 1.5 秒后自动重试
+            await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        } catch (err) {
+            lastError = err;
+            if (attempt < 2) {
+                await new Promise((resolve) => window.setTimeout(resolve, 2000));
+                continue;
+            }
+            throw err;
         }
-        // 如果遇到 423 Locked，等待 1.5 秒后自动重试
-        await new Promise((resolve) => window.setTimeout(resolve, 1500));
     }
     if (!response || !response.ok) await throwWebdavError(response!, webdavText("uploadFailed"));
 }

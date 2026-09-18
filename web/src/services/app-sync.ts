@@ -85,43 +85,45 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
     emitProgress(onProgress, { stage: "等待本地数据加载" });
     await Promise.all([waitForHydration(useCanvasStore), waitForHydration(useAssetStore)]);
 
-    const [canvas, assets, imageLogs, videoLogs] = await Promise.all([
-        syncDomain<CanvasDomainData>(config, onProgress, {
-            key: "canvas",
-            label: "画布",
-            emptyData: { projects: [], deleted: [] },
-            localData: async () => {
-                const { projects, deletedProjects } = useCanvasStore.getState();
-                return { projects, deleted: deletedProjects };
-            },
-            mergeData: mergeCanvasData,
-            applyData: async (data) => useCanvasStore.getState().replaceProjects(data.projects, data.deleted),
-        }),
-        syncDomain<AssetDomainData>(config, onProgress, {
-            key: "assets",
-            label: "我的资产",
-            emptyData: { assets: [] },
-            localData: async () => ({ assets: useAssetStore.getState().assets }),
-            mergeData: (local, remote) => ({ assets: mergeById(local.assets, remote.assets, "updatedAt") }),
-            applyData: async (data) => useAssetStore.getState().replaceAssets(await Promise.all(data.assets.map(hydrateAsset))),
-        }),
-        syncDomain<LogDomainData>(config, onProgress, {
-            key: "image-workbench",
-            label: "生图工作台",
-            emptyData: { logs: [] },
-            localData: async () => ({ logs: await readStoredLogs(imageLogStore) }),
-            mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
-            applyData: async (data) => replaceStoredLogs(imageLogStore, data.logs),
-        }),
-        syncDomain<LogDomainData>(config, onProgress, {
-            key: "video-workbench",
-            label: "视频创作台",
-            emptyData: { logs: [] },
-            localData: async () => ({ logs: await readStoredLogs(videoLogStore) }),
-            mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
-            applyData: async (data) => replaceStoredLogs(videoLogStore, data.logs),
-        }),
-    ]);
+    // 依次按顺序同步各业务领域，避免多个模块同时并发上传抢占带宽和网盘写锁
+    const canvas = await syncDomain<CanvasDomainData>(config, onProgress, {
+        key: "canvas",
+        label: "画布",
+        emptyData: { projects: [], deleted: [] },
+        localData: async () => {
+            const { projects, deletedProjects } = useCanvasStore.getState();
+            return { projects, deleted: deletedProjects };
+        },
+        mergeData: mergeCanvasData,
+        applyData: async (data) => useCanvasStore.getState().replaceProjects(data.projects, data.deleted),
+    });
+
+    const assets = await syncDomain<AssetDomainData>(config, onProgress, {
+        key: "assets",
+        label: "我的资产",
+        emptyData: { assets: [] },
+        localData: async () => ({ assets: useAssetStore.getState().assets }),
+        mergeData: (local, remote) => ({ assets: mergeById(local.assets, remote.assets, "updatedAt") }),
+        applyData: async (data) => useAssetStore.getState().replaceAssets(await Promise.all(data.assets.map(hydrateAsset))),
+    });
+
+    const imageLogs = await syncDomain<LogDomainData>(config, onProgress, {
+        key: "image-workbench",
+        label: "生图工作台",
+        emptyData: { logs: [] },
+        localData: async () => ({ logs: await readStoredLogs(imageLogStore) }),
+        mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
+        applyData: async (data) => replaceStoredLogs(imageLogStore, data.logs),
+    });
+
+    const videoLogs = await syncDomain<LogDomainData>(config, onProgress, {
+        key: "video-workbench",
+        label: "视频创作台",
+        emptyData: { logs: [] },
+        localData: async () => ({ logs: await readStoredLogs(videoLogStore) }),
+        mergeData: (local, remote) => ({ logs: mergeById(local.logs, remote.logs, "createdAt") }),
+        applyData: async (data) => replaceStoredLogs(videoLogStore, data.logs),
+    });
 
     const result = {
         syncedAt: new Date().toISOString(),
@@ -259,10 +261,11 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
 
     // 媒体文件上传采用单并发（串行），彻底避免网盘 WebDAV 同一目录写入锁竞争（423 Locked）
     await runWithConcurrency(tasks, 1, async ({ item, blob }) => {
+        emitProgress(onProgress, { domain, label: domainLabel(domain), stage: `正在上传 (${uploadedFiles + 1}/${tasks.length}) · ${formatBytes(blob.size)}`, current: uploadedFiles, total: tasks.length, status: "active" });
         await uploadWebdavFile(config, item.path, blob, item.mimeType);
         uploadedFiles += 1;
         uploadedBytes += blob.size;
-        emitProgress(onProgress, { domain, label: domainLabel(domain), stage: `上传媒体 ${formatBytes(blob.size)}`, current: uploadedFiles, total: tasks.length, status: "active" });
+        emitProgress(onProgress, { domain, label: domainLabel(domain), stage: `已上传 (${uploadedFiles}/${tasks.length}) · ${formatBytes(blob.size)}`, current: uploadedFiles, total: tasks.length, status: "active" });
     });
 
     return { files, uploadedFiles, uploadedBytes };
