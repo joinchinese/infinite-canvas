@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
+import { AutoSyncStatusLine } from "@/components/access/auto-sync-engine";
 import { GitHubLink } from "@/components/layout/github-link";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { DOCS_URL } from "@/constant/env";
@@ -46,6 +47,14 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
 
     return (
         <div className="inline-flex shrink-0 items-center gap-1">
+            {/* 云端备份状态。放在这里而不是配置弹窗里，是因为普通成员打不开配置菜单——
+                而"我的东西有没有在备份"恰恰是成员最需要知道的信息。
+                管理员看得到这里，也仍能在配置弹窗里看到同一份状态。 */}
+            {accessUser ? (
+                <span className="mr-1 hidden sm:inline-flex">
+                    <AutoSyncStatusLine />
+                </span>
+            ) : null}
             {onOpenPlugins ? (
                 <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenPlugins} aria-label={t("topNav.plugins")} title={t("topNav.plugins")}>
                     <Puzzle className="size-4" />

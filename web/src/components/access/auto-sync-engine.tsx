@@ -6,7 +6,7 @@
  * - 登出时随组件卸载自动停引擎。
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Tooltip } from "antd";
 import dayjs from "dayjs";
 import { CloudOff, CloudUpload, LoaderCircle, TriangleAlert, type LucideIcon } from "lucide-react";
@@ -49,8 +49,13 @@ const PHASE_VIEW: Record<AutoSyncPhase, { icon: LucideIcon; tone: string; labelK
 };
 
 /**
- * 顶部一行同步状态。管理员和成员都能看到——成员最需要知道"我的东西有没有在存"。
- * 未配置 WebDAV 时显示一个灰色的"未启用"，而不是把自己藏起来。
+ * 一行同步状态。
+ *
+ * 挂在**顶栏**（所有登录用户可见）而不是配置弹窗里——因为普通成员打不开配置菜单，
+ * 而"我的东西有没有在备份"恰恰是成员最需要知道的信息。
+ *
+ * 失败时这一行本身变成可点击的「重试」按钮：静默退避意味着用户可能等很久才自然恢复，
+ * 提供一个随手可点的重试入口比让他干等更合理（但依然不弹窗打断）。
  */
 export function AutoSyncStatusLine() {
     const { t } = useTranslation();
@@ -61,6 +66,7 @@ export function AutoSyncStatusLine() {
     const url = useConfigStore((state) => state.webdav.url);
     const autoSync = useConfigStore((state) => state.webdav.autoSync);
     const directory = useConfigStore((state) => state.webdav.directory);
+    const [retrying, setRetrying] = useState(false);
 
     if (!url?.trim()) {
         return (
@@ -73,19 +79,43 @@ export function AutoSyncStatusLine() {
         );
     }
 
+    const retry = async () => {
+        setRetrying(true);
+        try {
+            await runAutoSync({ force: true });
+        } finally {
+            setRetrying(false);
+        }
+    };
+
     const time = lastSyncedAt ? dayjs(lastSyncedAt).format("HH:mm:ss") : "";
     const view = PHASE_VIEW[phase];
     const Icon = view.icon;
     const text = t(view.labelKey, { time });
 
+    // 失败态：整行变成"重试"按钮，鼠标悬浮给出具体错误原因。
+    if (phase === "failed") {
+        return (
+            <Tooltip title={t("access.autoSync.failedDetail", { message: lastError || "" })}>
+                <button
+                    type="button"
+                    disabled={retrying}
+                    onClick={() => void retry()}
+                    className={`inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs transition-colors hover:bg-red-500/10 disabled:cursor-wait ${view.tone}`}
+                >
+                    <Icon className={`size-3.5 ${retrying ? "animate-spin" : ""}`} />
+                    <span>{retrying ? t("access.autoSync.syncing") : t("access.autoSync.retry")}</span>
+                </button>
+            </Tooltip>
+        );
+    }
+
     return (
         <Tooltip
             title={
-                lastError
-                    ? t("access.autoSync.failedDetail", { message: lastError })
-                    : phase === "syncing"
-                      ? t("access.autoSync.syncingDetail", { stage: stage || t("access.autoSync.syncing") })
-                      : t("access.autoSync.detail", { directory: directory || "(根目录)" })
+                phase === "syncing"
+                    ? t("access.autoSync.syncingDetail", { stage: stage || t("access.autoSync.syncing") })
+                    : t("access.autoSync.detail", { directory: directory || "(根目录)" })
             }
         >
             <span className={`inline-flex cursor-default items-center gap-1.5 text-xs ${view.tone}`}>

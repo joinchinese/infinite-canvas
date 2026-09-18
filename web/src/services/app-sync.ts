@@ -216,11 +216,37 @@ async function syncDomain<T>(config: WebdavSyncConfig, onProgress: AppSyncProgre
     }
 }
 
+/**
+ * 读取某一个业务域的远端清单。
+ *
+ * ## 为什么 domain 对不上时"降级"而不是"报错"
+ *
+ * 原实现是直接抛 `invalidManifest`。这在单人手动同步的年代没什么问题——报错了人去看看就行。
+ * 但改成**无感静默备份**之后，这个异常会变成致命的：一个坏文件会让该业务域的备份
+ * **永久失败**，而且因为是静默的，用户根本不知道自己的资产一直没备份上。
+ *
+ * 实际上 domain 对不上只有三种来路，没有一种是"用户的真实数据"：
+ *
+ * 1. 网盘/OpenList 侧在目录里自动生成了同名文件；
+ * 2. 上一次写入被中断，留下半截 JSON（`JSON.parse` 成功但字段缺失）；
+ * 3. 改造前旧的目录结构残留（共享根目录 → 成员子目录迁移时遗留）。
+ *
+ * 三种情况下正确做法都是：**当作远端没有清单**，用本地数据重新建立一份并覆盖上去，
+ * 下一次同步就自愈了。抛错则会让它一直卡住——这才是真正会丢数据的路径。
+ *
+ * 注意 `JSON.parse` 失败也走同一条自愈路径（`file` 读到了但不是合法 JSON）。
+ */
 async function readDomainManifest<T>(config: WebdavSyncConfig, domain: DomainKey, emptyData: T): Promise<DomainManifest<T> | null> {
     const file = await downloadWebdavFile(config, domainPath(domain, WEBDAV_MANIFEST_FILE_NAME));
     if (!file) return null;
-    const data = JSON.parse(await file.text()) as DomainManifest<T>;
-    if (data.app !== "infinite-canvas" || data.domain !== domain) throw new Error(i18n.t("config.webdav.errors.invalidManifest", { domain }));
+    let data: DomainManifest<T>;
+    try {
+        data = JSON.parse(await file.text()) as DomainManifest<T>;
+    } catch {
+        // 半截 JSON / 非本应用写的内容：忽略远端，用本地重建。
+        return null;
+    }
+    if (!data || data.app !== "infinite-canvas" || data.domain !== domain) return null;
     return {
         app: "infinite-canvas",
         version: 1,
