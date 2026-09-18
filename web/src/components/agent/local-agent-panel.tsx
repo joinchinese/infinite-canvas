@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { App, Button, Tooltip } from "antd";
 import dayjs from "dayjs";
+import { nanoid } from "nanoid";
 import { Bot, History, MessageSquare, PanelRightClose, PlugZap, Plus, Sparkles, Terminal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -772,17 +773,19 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             return { nodeId, label, title, kind, previewUrl: image ? (await createMessageAttachmentMetadata(image)).url : previewUrl, text };
         }));
         const messageSkill = selectedSkill ? { name: selectedSkill.name, path: selectedSkill.path, displayName: selectedSkill.interface?.displayName || undefined } : undefined;
-        loadThreadsSequenceRef.current += 1;
         const currentBeforeSend = useAgentStore.getState();
         const requestThreadId = currentBeforeSend.activeThreadId;
-        setAgentState({ prompt: "", attachments: [], canvasReferences: [], activity: rt("sending"), sending: true, loadingThreads: false, activeTurnId: "", messages: currentBeforeSend.messages });
-        addMessage({ id: messageId, itemId: "synthetic:user", clientMessageId: messageId, threadId: requestThreadId, turnId: "", role: "user", text: userText, attachments: files, canvasReferences: messageReferences, skill: messageSkill });
+        const isBuiltin = currentState.agentMode === "builtin";
+        let threadId = isBuiltin ? (currentBeforeSend.activeThreadId || createBuiltinThreadId()) : requestThreadId;
+        const turnId = isBuiltin ? `turn_${nanoid(8)}` : "";
+        if (isBuiltin && !currentBeforeSend.activeThreadId) {
+            setAgentState({ activeThreadId: threadId });
+        }
+        loadThreadsSequenceRef.current += 1;
+        setAgentState({ prompt: "", attachments: [], canvasReferences: [], activity: rt("sending"), sending: true, loadingThreads: false, activeTurnId: turnId, messages: currentBeforeSend.messages });
+        addMessage({ id: messageId, itemId: "synthetic:user", clientMessageId: messageId, threadId, turnId, role: "user", text: userText, attachments: files, canvasReferences: messageReferences, skill: messageSkill });
 
-        if (currentState.agentMode === "builtin") {
-            const threadId = currentBeforeSend.activeThreadId || createBuiltinThreadId();
-            if (!currentBeforeSend.activeThreadId) {
-                setAgentState({ activeThreadId: threadId });
-            }
+        if (isBuiltin) {
             try {
                 await runBuiltinAgentTurn(requestPrompt, navigate, {
                     onActivity: (act) => setAgentState({ activity: act }),
@@ -801,7 +804,6 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             return;
         }
 
-        let threadId = requestThreadId;
         try {
             const messageAttachments = await Promise.all(files.map(createMessageAttachmentMetadata));
             const messageMetadata = {

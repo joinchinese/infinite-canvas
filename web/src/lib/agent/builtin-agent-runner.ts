@@ -106,14 +106,15 @@ export async function runBuiltinAgentTurn(
         content: `${BUILTIN_AGENT_SYSTEM_PROMPT}${imageSettingsPrompt}${canvasSummary}`,
     };
 
-    // 提取历史对话中最近的几轮纯对话（避免上下文过载）
+    // 提取历史对话中最近的几轮纯对话（排除当前刚加入 store 的最末尾这一条用户消息）
     const previousMessages: ChatMessage[] = [];
-    const validHistory = agentStore.messages.slice(-8);
-    for (const msg of validHistory) {
-        if (msg.role === "user") {
-            previousMessages.push({ role: "user", content: msg.text });
-        } else if (msg.role === "assistant" && msg.text.trim()) {
-            previousMessages.push({ role: "assistant", content: msg.text });
+    const allStoreMessages = agentStore.messages;
+    const historyPool = allStoreMessages.slice(0, -1).slice(-8);
+    for (const msg of historyPool) {
+        if (msg.role === "user" && msg.text?.trim()) {
+            previousMessages.push({ role: "user", content: msg.text.trim() });
+        } else if (msg.role === "assistant" && msg.text?.trim()) {
+            previousMessages.push({ role: "assistant", content: msg.text.trim() });
         }
     }
 
@@ -129,6 +130,8 @@ export async function runBuiltinAgentTurn(
 
     agentStore.addMessage({
         id: assistantMessageId,
+        threadId: agentStore.activeThreadId,
+        turnId: agentStore.activeTurnId,
         role: "assistant",
         text: "",
     });
@@ -232,25 +235,58 @@ export async function runBuiltinAgentTurn(
                                             ? 4
                                             : undefined;
 
-                            const ops = rawOps.map((op) => {
-                                if (op.type === "add_node" && (op.nodeType === "config" || !op.nodeType)) {
-                                    const meta = { ...(op.metadata || {}) };
-                                    if (!meta.model && selectedImageModel) {
-                                        meta.model = selectedImageModel;
-                                    }
-                                    if (!meta.size) {
-                                        meta.size = promptAspect || defaultSize;
-                                    }
-                                    if (!meta.count) {
-                                        meta.count = promptCount || defaultCount;
-                                    }
-                                    if (!meta.quality) {
-                                        meta.quality = defaultQuality;
-                                    }
-                                    return { ...op, metadata: meta };
+                            // 识别本批次中将被 run_generation 触发的 config 节点 ID
+                            const generatingConfigIds = new Set<string>();
+                            for (const op of rawOps) {
+                                if (op.type === "run_generation" && op.nodeId) {
+                                    generatingConfigIds.add(op.nodeId);
                                 }
-                                return op;
-                            });
+                            }
+
+                            // 若存在 run_generation，查找大模型手动连向该 config 节点的冗余空白 image 节点
+                            const redundantImageNodeIds = new Set<string>();
+                            if (generatingConfigIds.size > 0) {
+                                const connectedToConfig = new Set<string>();
+                                for (const op of rawOps) {
+                                    if (op.type === "connect_nodes" && op.fromNodeId && op.toNodeId && generatingConfigIds.has(op.fromNodeId)) {
+                                        connectedToConfig.add(op.toNodeId);
+                                    }
+                                }
+                                for (const op of rawOps) {
+                                    if (op.type === "add_node" && op.nodeType === "image" && op.id && connectedToConfig.has(op.id)) {
+                                        const meta = op.metadata || {};
+                                        if (!meta.content && (!meta.images || (Array.isArray(meta.images) && meta.images.length === 0))) {
+                                            redundantImageNodeIds.add(op.id);
+                                        }
+                                    }
+                                }
+                            }
+
+                            const ops = rawOps
+                                .filter((op) => {
+                                    if (op.type === "add_node" && op.id && redundantImageNodeIds.has(op.id)) return false;
+                                    if (op.type === "connect_nodes" && op.toNodeId && redundantImageNodeIds.has(op.toNodeId)) return false;
+                                    return true;
+                                })
+                                .map((op) => {
+                                    if (op.type === "add_node" && (op.nodeType === "config" || !op.nodeType)) {
+                                        const meta = { ...(op.metadata || {}) };
+                                        if (!meta.model && selectedImageModel) {
+                                            meta.model = selectedImageModel;
+                                        }
+                                        if (!meta.size) {
+                                            meta.size = promptAspect || defaultSize;
+                                        }
+                                        if (!meta.count) {
+                                            meta.count = promptCount || defaultCount;
+                                        }
+                                        if (!meta.quality) {
+                                            meta.quality = defaultQuality;
+                                        }
+                                        return { ...op, metadata: meta };
+                                    }
+                                    return op;
+                                });
                             const updatedSnapshot = currentCtx.applyOps(ops);
                             toolOutput = JSON.stringify({
                                 success: true,
