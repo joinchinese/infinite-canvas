@@ -173,6 +173,8 @@ const zhCN = {
         manualNow: "立即备份",
         manualRunning: "备份中…",
         manualDone: "备份完成",
+        details: "备份详情",
+        detailPanel: { title: "云端备份", close: "关闭", target: "备份位置", lastSuccess: "上次成功备份", never: "暂无记录", uploaded: "上次上传", autoBackup: "自动备份", on: "已开启（空闲时自动增量备份）", off: "已关闭", status: "当前状态" },
     },
 };
 
@@ -338,6 +340,8 @@ const enUS = {
         manualNow: "Back up now",
         manualRunning: "Backing up…",
         manualDone: "Backup complete",
+        details: "Backup details",
+        detailPanel: { title: "Cloud backup", close: "Close", target: "Backup location", lastSuccess: "Last successful backup", never: "No record yet", uploaded: "Last upload", autoBackup: "Automatic backup", on: "On (incremental backup while idle)", off: "Off", status: "Current status" },
     },
 };
 

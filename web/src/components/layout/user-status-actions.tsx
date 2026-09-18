@@ -51,7 +51,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 而"我的东西有没有在备份"恰恰是成员最需要知道的信息。
                 管理员看得到这里，也仍能在配置弹窗里看到同一份状态。 */}
             {accessUser ? (
-                <span className="mr-1 hidden sm:inline-flex">
+                <span className="mr-1 inline-flex shrink-0">
                     <AutoSyncStatusLine />
                 </span>
             ) : null}
