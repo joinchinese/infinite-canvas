@@ -322,6 +322,9 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                 ]}
                                             />
                                         </Form.Item>
+                                        <Form.Item label="增量断点秒传" extra="开启后自动探测远端已存在文件并秒级跳过，避免网络中断后重复传输大文件（默认推荐；关闭则严格遵循原版纯清单比对）" className="mb-0 md:col-span-2">
+                                            <Switch checked={webdav.skipExistingFiles !== false} onChange={(checked) => updateWebdavConfig("skipExistingFiles", checked)} />
+                                        </Form.Item>
                                     </div>
                                     <div className="mt-4 flex flex-wrap items-center gap-2">
                                         <Button icon={<Wifi className="size-4" />} disabled={!webdavReady || syncingWebdav} loading={testingWebdav} onClick={() => void testWebdav()}>

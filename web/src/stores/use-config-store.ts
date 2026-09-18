@@ -64,6 +64,7 @@ export type WebdavSyncConfig = {
     lastSyncedAt: string;
     useProxy?: boolean;
     syncMode?: "concurrent" | "serial";
+    skipExistingFiles?: boolean;
 };
 export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
 
@@ -133,6 +134,7 @@ export const defaultWebdavSyncConfig: WebdavSyncConfig = {
     lastSyncedAt: "",
     useProxy: false,
     syncMode: "concurrent",
+    skipExistingFiles: true,
 };
 
 type ConfigStore = {

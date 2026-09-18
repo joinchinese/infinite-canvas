@@ -269,9 +269,10 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
     let uploadedFiles = 0;
     let uploadedBytes = 0;
 
-    // 预先探测远端 files/ 目录下已有的物理文件（断点秒传：远端已存在且大小一致的文件永不重复上传）
+    // 预先探测远端 files/ 目录下已有的物理文件（断点秒传：若开启增量断点秒传，已存在且大小一致的文件永不重复上传）
+    const shouldSkipExisting = config.skipExistingFiles !== false;
     const filesDir = domainPath(domain, "files");
-    const existingRemoteFiles = await listWebdavDirectoryFiles(config, filesDir);
+    const existingRemoteFiles = shouldSkipExisting ? await listWebdavDirectoryFiles(config, filesDir) : new Map<string, number>();
 
     const storageKeys = collectStorageKeys(data);
     let scanned = 0;
@@ -294,7 +295,7 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
         };
         files.push(item);
         const isMatchedInManifest = Boolean(remoteFile && remoteFile.bytes === blob.size);
-        const isMatchedOnServer = existingRemoteFiles.get(fileName) === blob.size;
+        const isMatchedOnServer = shouldSkipExisting && existingRemoteFiles.get(fileName) === blob.size;
         if (!isMatchedInManifest && !isMatchedOnServer) {
             tasks.push({ item, blob });
         }
