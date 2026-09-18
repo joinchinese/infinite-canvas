@@ -61,6 +61,7 @@ function AdminAutoPublish() {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const config = useConfigStore((state) => state.config);
+    const webdav = useConfigStore((state) => state.webdav);
     /** 已经同步给服务端的那份配置（JSON 串）。`null` 表示还没记过基线。 */
     const baseline = useRef<string | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -72,7 +73,8 @@ function AdminAutoPublish() {
 
     const flush = useCallback(async (snapshot: string) => {
         // 读最新值而不是闭包里的 config：防抖窗口里配置可能又变过。
-        const latest = useConfigStore.getState().config;
+        const latestConfig = useConfigStore.getState().config;
+        const latestWebdav = useConfigStore.getState().webdav;
         if (flushing.current) {
             queued.current = snapshot;
             return;
@@ -81,7 +83,7 @@ function AdminAutoPublish() {
         flushing.current = true;
         markSyncing();
         try {
-            const result = await publishSharedConfig(latest);
+            const result = await publishSharedConfig(latestConfig, latestWebdav);
             noteSharedConfigPublished(result.updatedAt, result.missingSecrets);
             knownUpdatedAt.current = result.updatedAt;
             baseline.current = snapshot;
@@ -99,7 +101,7 @@ function AdminAutoPublish() {
     }, []);
 
     useEffect(() => {
-        const snapshot = JSON.stringify(config);
+        const snapshot = JSON.stringify({ config, webdav });
 
         // 护栏 1：挂载时的第一份配置只作基线，不推送。
         if (baseline.current === null) {
@@ -114,7 +116,7 @@ function AdminAutoPublish() {
         return () => {
             if (timer.current) clearTimeout(timer.current);
         };
-    }, [config, flush]);
+    }, [config, webdav, flush]);
 
     // 多设备协同：当管理员切回浏览器标签页或定期检查时，
     // 若本地没有正在编辑的未保存改动，且云端有其他设备发布的新版本，则自动静默同步对齐

@@ -43,6 +43,7 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/a
 import { CanvasSidePanel } from "@/components/canvas/canvas-side-panel";
 import { CanvasZoomControls } from "@/components/canvas/canvas-zoom-controls";
 import { useAgentStore } from "@/stores/use-agent-store";
+import { useGenerationActivityStore } from "@/stores/use-generation-activity-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
@@ -296,13 +297,19 @@ function InfiniteCanvasPage() {
     const startGenerationRequest = useCallback((targetNodeId: string, originNodeId: string, runningId = originNodeId, controller = new AbortController()) => {
         const previous = generationRequestsRef.current.get(targetNodeId);
         if (previous?.controller !== controller) previous?.controller.abort();
+        // 首次占用这个 targetNodeId 时登记一次全局「正在生成」，供静默备份避让。
+        // 复用已有 targetNodeId 不重复计数，避免并发登记把计数器顶高、导致备份迟迟不跑。
+        if (!generationRequestsRef.current.has(targetNodeId)) useGenerationActivityStore.getState().begin();
         generationRequestsRef.current.set(targetNodeId, { targetNodeId, originNodeId, runningNodeId: runningId, controller });
         return controller;
     }, []);
 
     const finishGenerationRequest = useCallback((targetNodeId: string, controller: AbortController) => {
         const request = generationRequestsRef.current.get(targetNodeId);
-        if (request?.controller === controller) generationRequestsRef.current.delete(targetNodeId);
+        if (request?.controller === controller) {
+            generationRequestsRef.current.delete(targetNodeId);
+            useGenerationActivityStore.getState().end();
+        }
     }, []);
 
     const completeVideoNodeTask = useCallback(

@@ -1,25 +1,37 @@
 import i18n from "@/i18n";
-import { withLocalProxy, type WebdavSyncConfig } from "@/stores/use-config-store";
+import { withResolvedWebdavDirectory, withLocalProxy, type WebdavSyncConfig } from "@/stores/use-config-store";
 
 export const WEBDAV_MANIFEST_FILE_NAME = "manifest.json";
 const WEBDAV_REQUEST_TIMEOUT_MS = 300000;
 const ensuredDirectories = new Set<string>();
 const webdavText = (key: string, options?: Record<string, unknown>) => i18n.t(`config.webdav.errors.${key}`, options);
 
+/**
+ * 统一出口：把「成员隔离段」固化进目录后再发请求。
+ *
+ * 隔离段由服务端下发（见 `worker/config.ts`），在这里收口意味着
+ * `app-sync` / 配置弹窗 / 重新登录后的自动同步都不需要各自处理路径拼接，
+ * 也就不可能出现某条链路漏拼、把成员数据写到共享根目录的情况。
+ */
+function scoped(config: WebdavSyncConfig): WebdavSyncConfig {
+    return withResolvedWebdavDirectory(config);
+}
+
 export async function testWebdavConnection(config: WebdavSyncConfig) {
-    await ensureWebdavDirectory(config);
-    const response = await webdavFetch(config, "", { method: "PROPFIND", headers: { Depth: "0" } });
+    await ensureWebdavDirectory(scoped(config));
+    const response = await webdavFetch(scoped(config), "", { method: "PROPFIND", headers: { Depth: "0" } });
     if (response.ok || response.status === 207) return;
     await throwWebdavError(response, webdavText("testFailed"));
 }
 
 export async function downloadWebdavSyncFile(config: WebdavSyncConfig) {
-    return downloadWebdavFile(config, WEBDAV_MANIFEST_FILE_NAME);
+    return downloadWebdavFile(scoped(config), WEBDAV_MANIFEST_FILE_NAME);
 }
 
 export async function downloadWebdavFile(config: WebdavSyncConfig, path: string) {
-    await ensureWebdavDirectory(config);
-    const response = await webdavFetch(config, path, { method: "GET" });
+    const target = scoped(config);
+    await ensureWebdavDirectory(target);
+    const response = await webdavFetch(target, path, { method: "GET" });
     if (response.status === 404) return null;
     if (!response.ok) await throwWebdavError(response, webdavText("downloadFailed"));
     const file = await withTimeout(response.blob(), webdavText("downloadTimeout"));
@@ -27,18 +39,19 @@ export async function downloadWebdavFile(config: WebdavSyncConfig, path: string)
 }
 
 export async function uploadWebdavSyncFile(config: WebdavSyncConfig, file: Blob) {
-    return uploadWebdavFile(config, WEBDAV_MANIFEST_FILE_NAME, file, "application/json");
+    return uploadWebdavFile(scoped(config), WEBDAV_MANIFEST_FILE_NAME, file, "application/json");
 }
 
 export async function uploadWebdavFile(config: WebdavSyncConfig, path: string, file: Blob, contentType = "application/octet-stream") {
     if (!file.size) throw new Error(webdavText("emptyUpload"));
-    await ensureWebdavDirectory(config);
-    await ensureWebdavSubdirectory(config, path);
+    const target = scoped(config);
+    await ensureWebdavDirectory(target);
+    await ensureWebdavSubdirectory(target, path);
     let response: Response | null = null;
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
-            response = await webdavFetch(config, path, {
+            response = await webdavFetch(target, path, {
                 method: "PUT",
                 headers: { "Content-Type": contentType },
                 body: file,

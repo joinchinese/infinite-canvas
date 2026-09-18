@@ -65,6 +65,22 @@ export type WebdavSyncConfig = {
     useProxy?: boolean;
     syncMode?: "concurrent" | "serial";
     skipExistingFiles?: boolean;
+    /**
+     * 由管理员统一纳管（下发）的配置。普通成员拿到的大概率是 true：
+     * 地址、账号、密钥、根目录都来自 `/api/config`，成员在本机改不动真正的落盘位置。
+     */
+    managed?: boolean;
+    /** 管理员侧开关：是否把这份 WebDAV 配置下发给全体成员。false 时成员各自的本地配置照旧。 */
+    sharedEnabled?: boolean;
+    /** 无感静默自动同步。开启后空闲时自动增量备份，不需要任何手动点击。 */
+    autoSync?: boolean;
+    /**
+     * 普通成员的隔离子目录段（服务端下发时按用户名生成），如 `users/alice`。
+     * 由服务端注入，前端不参与发布——成员改不了它，也就无法把自己写回共享根目录。
+     */
+    memberScope?: string;
+    /** 管理员侧开关：是否让成员各自使用独立子目录（默认开）。关闭则全员共用一个目录（会互相覆盖）。 */
+    isolateMembers?: boolean;
 };
 export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
 
@@ -135,7 +151,40 @@ export const defaultWebdavSyncConfig: WebdavSyncConfig = {
     useProxy: false,
     syncMode: "concurrent",
     skipExistingFiles: true,
+    managed: false,
+    sharedEnabled: true,
+    autoSync: true,
+    memberScope: "",
+    isolateMembers: true,
 };
+
+/**
+ * 把「根目录 + 成员隔离段」拼成真正落盘的目录。
+ *
+ * 服务端下发时已经把成员段拼进了 `directory`（见 `worker/config.ts` 的 `readSharedConfig`），
+ * 正常情况下这里只是原样返回。但有两种情况需要兜一下：
+ *
+ * 1. 老版本下发的配置只带了 `memberScope` 没带拼好的 `directory`；
+ * 2. 成员本机残留了一份旧 `directory`，与服务端下发的成员段不一致。
+ *
+ * 幂等：已经包含成员段就不重复拼接。
+ */
+export function resolveWebdavSyncDirectory(config: WebdavSyncConfig): string {
+    const directory = (config.directory || "").trim().replace(/^\/+|\/+$/g, "");
+    const scope = (config.memberScope || "").trim().replace(/^\/+|\/+$/g, "");
+    if (!scope) return directory;
+    if (directory === scope || directory.endsWith(`/${scope}`)) return directory;
+    return directory ? `${directory}/${scope}` : scope;
+}
+
+/**
+ * 生成一份用于实际上传/下载的配置：把最终目录固化进 `directory`。
+ * 所有网络请求都应该用它，这样调用点不需要关心隔离段的存在。
+ */
+export function withResolvedWebdavDirectory(config: WebdavSyncConfig): WebdavSyncConfig {
+    const directory = resolveWebdavSyncDirectory(config);
+    return directory === config.directory ? config : { ...config, directory };
+}
 
 type ConfigStore = {
     config: AiConfig;

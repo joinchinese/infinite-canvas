@@ -31,7 +31,10 @@ import { create } from "zustand";
 
 import { AccessApiError, fetchMe, loginRequest, logoutRequest, setupRequest, type AccessUser } from "@/services/api/auth";
 import { applySharedConfig, fetchSharedConfig, type SharedConfigResponse } from "@/services/api/shared-config";
+import { resetAutoSyncEngine } from "@/services/auto-sync-engine";
 import { resetSyncState } from "@/stores/use-shared-config-sync-store";
+import { useAutoSyncStore } from "@/stores/use-auto-sync-store";
+import { useGenerationActivityStore } from "@/stores/use-generation-activity-store";
 
 export type AccessStatus = "loading" | "unauthenticated" | "authenticated" | "degraded" | "error";
 
@@ -143,7 +146,7 @@ async function finishAuthentication(user: AccessUser): Promise<void> {
 
     const shared = await loadSharedConfigQuietly();
     if (shared?.config) {
-        applySharedConfig(shared.config);
+        applySharedConfig(shared.config, shared.webdav);
         sharedConfigUpdatedAt = shared.updatedAt;
         sharedConfigMissingSecrets = shared.missingSecrets;
     }
@@ -204,6 +207,10 @@ export async function signOut(): Promise<void> {
     bootstrapTask = Promise.resolve();
     // 同步状态是"上一个登录者"的，别让它跨会话留着。
     resetSyncState();
+    // 静默备份引擎与其状态同理：退避计数、进行中的定时器都不该带到下一个账号。
+    resetAutoSyncEngine();
+    useAutoSyncStore.getState().reset();
+    useGenerationActivityStore.getState().reset();
     useAccessStore.setState({
         status: "unauthenticated",
         user: null,

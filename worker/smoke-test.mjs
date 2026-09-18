@@ -551,6 +551,64 @@ async function main() {
     await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG });
     await upstream.close();
 
+    // -----------------------------------------------------------------------
+    // WebDAV 统一纳管与成员专属目录隔离
+    // -----------------------------------------------------------------------
+    const WEBDAV = {
+        url: "https://dav.example.com/webdav",
+        username: "backup-user",
+        password: "backup-pass",
+        directory: "infinite-canvas",
+        lastSyncedAt: "",
+        useProxy: false,
+        syncMode: "serial",
+        skipExistingFiles: true,
+        autoSync: true,
+        sharedEnabled: true,
+        isolateMembers: true,
+    };
+
+    const webdavPublished = await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG, webdav: WEBDAV });
+    expectStatus("管理员可发布 WebDAV 纳管配置", webdavPublished, 200);
+
+    const adminWebdav = await configAdmin.get("/api/config");
+    record("管理员读回自己的 WebDAV 配置（目录原样，不追加成员段）", adminWebdav.payload?.webdav?.directory === "infinite-canvas", String(adminWebdav.payload?.webdav?.directory));
+    record("管理员的 WebDAV 配置不打 managed 标记", !adminWebdav.payload?.webdav?.managed);
+
+    const memberWebdav = await configMember.get("/api/config");
+    record("普通成员能读到下发的 WebDAV 配置", Boolean(memberWebdav.payload?.webdav?.url), String(memberWebdav.payload?.webdav?.url));
+    const memberDir = memberWebdav.payload?.webdav?.directory;
+    const expectedScope = `users/${String(CONFIG_MEMBER.username).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    record("成员拿到专属子目录（根目录/users/<用户名>）", memberDir === `infinite-canvas/${expectedScope}`, String(memberDir));
+    record("成员同时拿到 memberScope 供前端幂等拼接", memberWebdav.payload?.webdav?.memberScope === expectedScope, String(memberWebdav.payload?.webdav?.memberScope));
+    record("成员的 WebDAV 配置带 managed 标记（前端据此置灰输入）", memberWebdav.payload?.webdav?.managed === true);
+    record("成员读到的 WebDAV 凭据可用（这是共享备份账号，非渠道密钥）", memberWebdav.payload?.webdav?.username === "backup-user");
+    record("成员拿到的目录不等于管理员根目录（不会互相覆盖）", Boolean(memberDir) && memberDir !== "infinite-canvas", `${memberDir}`);
+
+    // 管理员关掉下发：成员应读不到 WebDAV 配置，而不是拿到别人的。
+    await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG, webdav: { ...WEBDAV, sharedEnabled: false } });
+    const memberAfterDisable = await configMember.get("/api/config");
+    record("关闭下发后成员读不到 WebDAV 配置", memberAfterDisable.payload?.webdav === null, JSON.stringify(memberAfterDisable.payload?.webdav));
+
+    // 管理员关掉隔离：全员落到根目录（危险选项，但行为要可预期）。
+    await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG, webdav: { ...WEBDAV, isolateMembers: false } });
+    const memberNoIsolate = await configMember.get("/api/config");
+    record("关闭隔离后成员落到共享根目录", memberNoIsolate.payload?.webdav?.directory === "infinite-canvas", String(memberNoIsolate.payload?.webdav?.directory));
+    record("关闭隔离后 memberScope 为空（不重复拼接）", memberNoIsolate.payload?.webdav?.memberScope === "", JSON.stringify(memberNoIsolate.payload?.webdav?.memberScope));
+
+    // webdav 传 null 表示撤销纳管，成员应回落到各自本地配置。
+    await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG, webdav: null });
+    const memberAfterRevoke = await configMember.get("/api/config");
+    record("传 null 可撤销 WebDAV 纳管", memberAfterRevoke.payload?.webdav === null, JSON.stringify(memberAfterRevoke.payload?.webdav));
+
+    // 非法 webdav（数组）不应被写进库，且不影响配置本身的发布。
+    const badWebdav = await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG, webdav: ["nope"] });
+    expectStatus("webdav 传数组时仍按配置本身返回 200", badWebdav, 200);
+    const afterBadWebdav = await configAdmin.get("/api/config");
+    record("非法 webdav 不会被持久化", afterBadWebdav.payload?.webdav === null, JSON.stringify(afterBadWebdav.payload?.webdav));
+
+    await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG });
+
     console.log(`\n${"-".repeat(56)}`);
     const passed = results.length - failures;
     console.log(`结果：${passed}/${results.length} 通过，${failures} 失败`);

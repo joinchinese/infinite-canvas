@@ -158,6 +158,21 @@ const zhCN = {
         failedDetail: "同步失败：{{message}}。改动目前只存在这台电脑上，成员看不到。请检查网络或重新登录后再改一次。",
         memberUpdated: "管理员更新了配置，已自动应用",
     },
+    autoSync: {
+        idle: "云端备份就绪",
+        syncing: "正在备份…",
+        synced: "已备份 · {{time}}",
+        failed: "备份失败",
+        disabled: "自动备份已关闭",
+        notConfigured: "未启用云端备份",
+        notConfiguredHint: "管理员还没有配置 WebDAV。配置完成后，你的画布与资产会自动备份到云端。",
+        detail: "画布、我的资产与生成记录会在你空闲时自动增量备份到 WebDAV 的 {{directory}} 目录；生成过程中会自动避让，不会上传未完成的图片。",
+        syncingDetail: "正在备份到云端：{{stage}}",
+        failedDetail: "备份失败：{{message}}。你的数据仍保存在本机，引擎会按退避策略自动重试；持续失败请检查 WebDAV 地址或凭据。",
+        manualNow: "立即备份",
+        manualRunning: "备份中…",
+        manualDone: "备份完成",
+    },
 };
 
 const enUS = {
@@ -306,6 +321,21 @@ const enUS = {
         skippedDetail: "No channel on this machine has an API key (usually a fresh device). Publishing would wipe every channel and real key on the server, so nothing was published. Fill in a channel key here first.",
         failedDetail: "Sync failed: {{message}}. Your change currently exists only on this computer; members cannot see it. Check your connection or sign in again, then edit once more.",
         memberUpdated: "An administrator updated the configuration; it has been applied",
+    },
+    autoSync: {
+        idle: "Cloud backup ready",
+        syncing: "Backing up…",
+        synced: "Backed up · {{time}}",
+        failed: "Backup failed",
+        disabled: "Auto backup is off",
+        notConfigured: "Cloud backup not enabled",
+        notConfiguredHint: "An administrator has not configured WebDAV yet. Once configured, your canvases and assets are backed up to the cloud automatically.",
+        detail: "Canvases, assets and generation records are incrementally backed up to the {{directory}} folder on WebDAV while you are idle; in-progress generations are skipped so unfinished images are never uploaded.",
+        syncingDetail: "Backing up to the cloud: {{stage}}",
+        failedDetail: "Backup failed: {{message}}. Your data is still on this device and the engine retries with backoff; if it keeps failing, check the WebDAV URL or credentials.",
+        manualNow: "Back up now",
+        manualRunning: "Backing up…",
+        manualDone: "Backup complete",
     },
 };
 

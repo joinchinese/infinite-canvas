@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
+import { AutoSyncStatusLine, triggerManualAutoSync } from "@/components/access/auto-sync-engine";
 import { SharedConfigSyncStatus } from "@/components/access/shared-config-sync";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ConfigLocalProxy } from "@/components/layout/config-local-proxy";
@@ -12,11 +13,13 @@ import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { ConfigLocalStorage } from "@/components/layout/config-local-storage";
 import type { AppLocale } from "@/i18n";
 import { exportAppConfig, importAppConfig } from "@/services/config-file";
-import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
+import { subscribeAutoSync } from "@/services/auto-sync-engine";
+import type { AppSyncDomainKey, AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
+import { useAutoSyncStore } from "@/stores/use-auto-sync-store";
 import { useCanOpenConfig } from "@/stores/use-access-store";
-import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, resolveWebdavSyncDirectory, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -66,7 +69,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const shouldPromptContinue = useConfigStore((state) => state.shouldPromptContinue);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
+    // 管理员专属开关（下发/隔离）只在管理员打开时显示。成员到不了这个面板，兜一层更稳。
+    const canOpenConfig = useCanOpenConfig();
     const webdavReady = Boolean(webdav.url.trim());
+    // 成员侧（或管理员本机采用了云端纳管配置）时，连接信息只读。管理员自己的配置不受影响。
+    const isManagedWebdav = Boolean(webdav.managed) && !canOpenConfig;
     const editingChannel = config.channels.find((channel) => channel.id === editingChannelId) || null;
     const locale = i18n.resolvedLanguage as AppLocale;
     useEffect(() => setActiveTab(initialTab), [initialTab]);
@@ -152,14 +159,29 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         setSyncingWebdav(true);
         setWebdavDomainProgress(createWebdavDomainProgress());
         setWebdavSyncStatus(t("config.webdav.preparing"));
+        // 订阅引擎事件来驱动进度条；手动同步走引擎（`force`）而不是直接调
+        // `syncAppDataToWebdav`，因为引擎内部有互斥锁——否则用户点击时若后台正好在
+        // 自动备份，两个同步并发会撞出 423 Locked 与重复上传。
+        const unsubscribe = subscribeAutoSync((event) => {
+            if (event.type === "progress") updateWebdavProgress(event.event);
+            else if (event.type === "failure") setWebdavSyncStatus(event.message);
+        });
         try {
-            const result = await syncAppDataToWebdav(webdav, updateWebdavProgress);
-            updateWebdavConfig("lastSyncedAt", result.syncedAt);
-            message.success(t("config.webdav.completed", { projects: result.projects, assets: result.assets, records: result.imageLogs + result.videoLogs, files: result.uploadedFiles, bytes: formatBytes(result.uploadedBytes) }));
+            await triggerManualAutoSync();
+            // 引擎跑完会把结果写进 `useAutoSyncStore`；这里读它来给出成功/失败反馈。
+            const snapshot = useAutoSyncStore.getState();
+            if (snapshot.phase === "failed") {
+                const detail = snapshot.lastError || t("config.webdav.failed");
+                setWebdavSyncStatus(detail);
+                message.error(detail);
+            } else {
+                message.success(t("config.webdav.completed", { files: snapshot.lastUploadedFiles, bytes: formatBytes(snapshot.lastUploadedBytes) }));
+            }
         } catch (error) {
             setWebdavSyncStatus(error instanceof Error ? error.message : t("config.webdav.failed"));
             message.error(error instanceof Error ? error.message : t("config.webdav.failed"));
         } finally {
+            unsubscribe();
             setSyncingWebdav(false);
         }
     };
@@ -294,20 +316,29 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                             </div>
                                             <div className="mt-1 text-xs text-stone-500">{t("config.webdav.description")}</div>
                                         </div>
-                                        <div className="text-xs text-stone-500">{webdav.lastSyncedAt ? t("config.webdav.lastSynced", { time: formatWebdavTime(webdav.lastSyncedAt, locale) }) : t("config.webdav.neverSynced")}</div>
+                                        <div className="flex flex-col items-end gap-1 text-xs text-stone-500">
+                                            <span>{webdav.lastSyncedAt ? t("config.webdav.lastSynced", { time: formatWebdavTime(webdav.lastSyncedAt, locale) }) : t("config.webdav.neverSynced")}</span>
+                                            <AutoSyncStatusLine />
+                                        </div>
                                     </div>
+                                    {/* 成员侧：连接信息由管理员下发，本地不可改（改了下次拉取也会被纠正） */}
+                                    {isManagedWebdav ? (
+                                        <div className="mb-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
+                                            {t("config.webdav.managedNotice", { directory: resolveWebdavSyncDirectory(webdav) || "(根目录)" })}
+                                        </div>
+                                    ) : null}
                                     <div className="grid gap-4 md:grid-cols-2">
                                         <Form.Item label={t("config.webdav.url")} className="mb-4">
-                                            <Input value={webdav.url} placeholder="https://nas.example.com/webdav" onChange={(event) => updateWebdavConfig("url", event.target.value)} />
+                                            <Input value={webdav.url} disabled={isManagedWebdav} placeholder="https://nas.example.com/webdav" onChange={(event) => updateWebdavConfig("url", event.target.value)} />
                                         </Form.Item>
                                         <Form.Item label={t("config.webdav.directory")} extra={t("config.webdav.directoryDescription", { manifest: WEBDAV_MANIFEST_FILE_NAME })} className="mb-4">
-                                            <Input value={webdav.directory} placeholder="infinite-canvas" onChange={(event) => updateWebdavConfig("directory", event.target.value)} />
+                                            <Input value={webdav.directory} disabled={isManagedWebdav} placeholder="infinite-canvas" onChange={(event) => updateWebdavConfig("directory", event.target.value)} />
                                         </Form.Item>
                                         <Form.Item label={t("config.webdav.username")} className="mb-4">
-                                            <Input value={webdav.username} autoComplete="username" onChange={(event) => updateWebdavConfig("username", event.target.value)} />
+                                            <Input value={webdav.username} disabled={isManagedWebdav} autoComplete="username" onChange={(event) => updateWebdavConfig("username", event.target.value)} />
                                         </Form.Item>
                                         <Form.Item label={t("config.webdav.password")} className="mb-4">
-                                            <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
+                                            <Input.Password value={webdav.password} disabled={isManagedWebdav} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
                                         </Form.Item>
                                         <Form.Item label="通过代理转发" extra="默认直连速度最快。自建隧道或支持跨域的 WebDAV 建议关闭；仅在无法直连或跨域失败时开启" className="mb-0">
                                             <Switch checked={Boolean(webdav.useProxy)} onChange={(checked) => updateWebdavConfig("useProxy", checked)} />
@@ -325,6 +356,20 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                         <Form.Item label="增量断点秒传" extra="开启后自动探测远端已存在文件并秒级跳过，避免网络中断后重复传输大文件（默认推荐；关闭则严格遵循原版纯清单比对）" className="mb-0 md:col-span-2">
                                             <Switch checked={webdav.skipExistingFiles !== false} onChange={(checked) => updateWebdavConfig("skipExistingFiles", checked)} />
                                         </Form.Item>
+                                        <Form.Item label="无感静默备份" extra="开启后你空闲时（含切回标签页、生成任务全部完成 8 秒后）自动增量备份，无需任何手动操作；生成过程中会自动避让" className="mb-0">
+                                            <Switch checked={webdav.autoSync !== false} onChange={(checked) => updateWebdavConfig("autoSync", checked)} />
+                                        </Form.Item>
+                                        {/* 管理员专属：是否把这份配置下发给全体成员 + 是否按成员隔离目录 */}
+                                        {canOpenConfig ? (
+                                            <>
+                                                <Form.Item label="下发给所有成员" extra="开启后，成员登录即自动使用这份 WebDAV 配置，把各自的画布与资产备份到同一台服务器" className="mb-0">
+                                                    <Switch checked={webdav.sharedEnabled !== false} onChange={(checked) => updateWebdavConfig("sharedEnabled", checked)} />
+                                                </Form.Item>
+                                                <Form.Item label="成员独立子目录" extra="开启后每位成员的数据写入「根目录/users/用户名/」，互不覆盖；关闭则全员共用一个目录（会互相覆盖，仅单人使用或需合并快照时关闭）" className="mb-0 md:col-span-2">
+                                                    <Switch checked={webdav.isolateMembers !== false} disabled={webdav.sharedEnabled === false} onChange={(checked) => updateWebdavConfig("isolateMembers", checked)} />
+                                                </Form.Item>
+                                            </>
+                                        ) : null}
                                     </div>
                                     <div className="mt-4 flex flex-wrap items-center gap-2">
                                         <Button icon={<Wifi className="size-4" />} disabled={!webdavReady || syncingWebdav} loading={testingWebdav} onClick={() => void testWebdav()}>

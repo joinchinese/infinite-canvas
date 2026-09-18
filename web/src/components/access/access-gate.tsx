@@ -25,6 +25,7 @@ import { OctagonAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import LoginPage from "@/pages/login";
+import { AutoSyncEngine } from "@/components/access/auto-sync-engine";
 import { SharedConfigSync } from "@/components/access/shared-config-sync";
 import { bootstrapAccess, reloadAccess, useAccessStore } from "@/stores/use-access-store";
 
@@ -44,9 +45,11 @@ export function AccessGate({ children }: { children: ReactNode }) {
     if (status === "error") return <GateError code={errorCode} message={errorMessage} />;
     // `SharedConfigSync` 只在已登录时挂载：管理员侧负责把本地改动自动下发给成员，
     // 成员侧负责在管理员更新后自动取回。它渲染成 null，不占布局。
+    // `AutoSyncEngine` 同理：已登录后空闲时把画布/资产无感增量备份到管理员配置的 WebDAV。
     return (
         <>
             <SharedConfigSync />
+            <AutoSyncEngine />
             {children}
         </>
     );

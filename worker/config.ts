@@ -59,6 +59,7 @@ export function channelIdFromPlaceholder(value: string): string {
 }
 
 const SHARED_CONFIG_KEY = "shared";
+const SHARED_WEBDAV_CONFIG_KEY = "shared_webdav";
 /** 配置里可能带用户手写的模型调用脚本，比 `readJsonBody` 默认的 64KB 上限放宽一些。 */
 const MAX_CONFIG_BYTES = 256 * 1024;
 
@@ -114,7 +115,7 @@ export async function handleConfig(request: Request, env: Env, secret: string): 
     if (method === "GET") {
         const auth = await requireUser(request, env, secret);
         if (!auth.ok) return auth.response;
-        return readSharedConfig(env, auth.user.role === "admin");
+        return readSharedConfig(env, auth.user);
     }
     if (method === "PUT") {
         const auth = await requireAdmin(request, env, secret);
@@ -128,13 +129,50 @@ export async function handleConfig(request: Request, env: Env, secret: string): 
 // 读取
 // ---------------------------------------------------------------------------
 
-async function readSharedConfig(env: Env, isAdmin: boolean): Promise<Response> {
+async function readSharedConfig(env: Env, user: { id: string; username: string; role: string }): Promise<Response> {
+    const isAdmin = user.role === "admin";
     const row = await env.DB.prepare("SELECT value_json, updated_at FROM app_config WHERE config_key = ?1")
         .bind(SHARED_CONFIG_KEY)
         .first<{ value_json: string; updated_at: number }>();
 
     const stored = row ? (parseJson(row.value_json) as Record<string, unknown> | null) : null;
-    if (!stored) return jsonResponse({ config: null, updatedAt: null, missingSecrets: [] });
+
+    // 读取管理员统一发布的 WebDAV 备份配置
+    const webdavRow = await env.DB.prepare("SELECT value_json, updated_at FROM app_config WHERE config_key = ?1")
+        .bind(SHARED_WEBDAV_CONFIG_KEY)
+        .first<{ value_json: string; updated_at: number }>();
+
+    const rawWebdav = webdavRow ? (parseJson(webdavRow.value_json) as Record<string, unknown> | null) : null;
+    let webdav: Record<string, unknown> | null = null;
+    if (rawWebdav && rawWebdav.sharedEnabled !== false && rawWebdav.url) {
+        if (isAdmin) {
+            webdav = rawWebdav;
+        } else {
+            // 普通成员：专属目录物理隔离。
+            //
+            // 目录形状是 `<管理员根目录>/users/<用户名>`。这里**在服务端拼好**而不是只下发
+            // `memberScope` 让前端自己拼，理由是安全性：成员无法通过改本地配置把自己写回
+            // 共享根目录（前端那份 `directory` 是下载覆盖的，改了下一次拉取又会被纠正）。
+            //
+            // `isolateMembers === false` 是管理员显式选择"全员共用一个目录"，属于危险选项，
+            // 只用于单人使用或确实想要一份合并快照的场景。
+            const baseDir = typeof rawWebdav.directory === "string" ? rawWebdav.directory.trim().replace(/^\/+|\/+$/g, "") : "infinite-canvas";
+            const isolate = rawWebdav.isolateMembers !== false;
+            if (isolate) {
+                const userSegment = normalizeMemberSegment(user.username || user.id || "member");
+                webdav = {
+                    ...rawWebdav,
+                    directory: `${baseDir}/users/${userSegment}`,
+                    memberScope: `users/${userSegment}`,
+                    managed: true,
+                };
+            } else {
+                webdav = { ...rawWebdav, directory: baseDir, memberScope: "", managed: true };
+            }
+        }
+    }
+
+    if (!stored) return jsonResponse({ config: null, webdav, updatedAt: null, missingSecrets: [] });
 
     const secretRows = await env.DB.prepare("SELECT channel_id, api_key FROM channel_secrets").all<{ channel_id: string; api_key: string }>();
     const secretMap = new Map((secretRows.results ?? []).map((item) => [item.channel_id, item.api_key]));
@@ -145,7 +183,7 @@ async function readSharedConfig(env: Env, isAdmin: boolean): Promise<Response> {
         .map((channel) => channel.id)
         .filter((id) => !withSecret.has(id));
 
-    return jsonResponse({ config, updatedAt: row?.updated_at ?? null, missingSecrets });
+    return jsonResponse({ config, webdav, updatedAt: row?.updated_at ?? null, missingSecrets });
 }
 
 function parseJson(text: string): unknown {
@@ -156,12 +194,27 @@ function parseJson(text: string): unknown {
     }
 }
 
+/**
+ * 把用户名压成一个安全的单层目录名。
+ *
+ * 用户名本身已经被注册校验限制为 `[A-Za-z0-9._-]`，但这里仍然要清洗，因为：
+ * - `user.username` 可能缺失（客户端传了 id）；
+ * - 未来若有管理员批量导入的账号，不保证同一条 D1 约束。
+ *
+ * 逗号、点、连字符会被压成下划线是**有意**的：WebDAV 的 `MKCOL` 对某些服务端
+ * 不会自动创建多级目录，而带点的段名在某些网盘上会被当成扩展名处理。
+ */
+function normalizeMemberSegment(value: string): string {
+    const cleaned = value.trim().replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_{2,}/g, "_").replace(/^_+|_+$/g, "");
+    return cleaned || "member";
+}
+
 // ---------------------------------------------------------------------------
 // 写入
 // ---------------------------------------------------------------------------
 
 async function writeSharedConfig(request: Request, env: Env, actorId: string): Promise<Response> {
-    const body = await readJsonBody<{ config?: unknown }>(request, MAX_CONFIG_BYTES);
+    const body = await readJsonBody<{ config?: unknown; webdav?: unknown }>(request, MAX_CONFIG_BYTES);
     const raw = body?.config;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return errorResponse(400, "invalid_config");
     if (!Array.isArray((raw as { channels?: unknown }).channels)) return errorResponse(400, "invalid_config");
@@ -198,6 +251,22 @@ async function writeSharedConfig(request: Request, env: Env, actorId: string): P
              ON CONFLICT(config_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
         ).bind(SHARED_CONFIG_KEY, JSON.stringify(sanitize(raw)), now, actorId),
     );
+
+    // 管理员发布的 WebDAV 统一配置持久化
+    if (body?.webdav !== undefined) {
+        if (body.webdav && typeof body.webdav === "object" && !Array.isArray(body.webdav)) {
+            statements.push(
+                env.DB.prepare(
+                    `INSERT INTO app_config (config_key, value_json, updated_at, updated_by) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(config_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+                ).bind(SHARED_WEBDAV_CONFIG_KEY, JSON.stringify(body.webdav), now, actorId),
+            );
+        } else if (body.webdav === null) {
+            statements.push(
+                env.DB.prepare("DELETE FROM app_config WHERE config_key = ?1").bind(SHARED_WEBDAV_CONFIG_KEY),
+            );
+        }
+    }
 
     // batch 在 D1 里是单事务执行：要么渠道密钥与配置一起生效，要么都不生效。
     await env.DB.batch(statements);
