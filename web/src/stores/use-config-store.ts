@@ -63,6 +63,7 @@ export type WebdavSyncConfig = {
     directory: string;
     lastSyncedAt: string;
     useProxy?: boolean;
+    syncMode?: "concurrent" | "serial";
 };
 export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
 
@@ -131,6 +132,7 @@ export const defaultWebdavSyncConfig: WebdavSyncConfig = {
     directory: "infinite-canvas",
     lastSyncedAt: "",
     useProxy: false,
+    syncMode: "concurrent",
 };
 
 type ConfigStore = {

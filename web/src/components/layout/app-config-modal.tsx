@@ -309,8 +309,18 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                         <Form.Item label={t("config.webdav.password")} className="mb-4">
                                             <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
                                         </Form.Item>
-                                        <Form.Item label="通过代理转发" extra="默认直连速度最快。自建隧道或支持跨域的 WebDAV 建议关闭；仅在无法直连或跨域失败时开启" className="mb-0 md:col-span-2">
+                                        <Form.Item label="通过代理转发" extra="默认直连速度最快。自建隧道或支持跨域的 WebDAV 建议关闭；仅在无法直连或跨域失败时开启" className="mb-0">
                                             <Switch checked={Boolean(webdav.useProxy)} onChange={(checked) => updateWebdavConfig("useProxy", checked)} />
+                                        </Form.Item>
+                                        <Form.Item label="并发传输模式" extra="并发模式多模块与多文件并行（原版行为）；顺序模式单线程按序传输（防锁冲突与限速推荐）" className="mb-0">
+                                            <Select
+                                                value={webdav.syncMode || "concurrent"}
+                                                onChange={(val) => updateWebdavConfig("syncMode", val)}
+                                                options={[
+                                                    { label: "⚡ 并发同步（原版多线程并发）", value: "concurrent" },
+                                                    { label: "🛡️ 顺序同步（单线程平稳防锁）", value: "serial" },
+                                                ]}
+                                            />
                                         </Form.Item>
                                     </div>
                                     <div className="mt-4 flex flex-wrap items-center gap-2">
