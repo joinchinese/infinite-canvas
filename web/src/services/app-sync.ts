@@ -257,7 +257,8 @@ async function uploadChangedFiles<T>(config: WebdavSyncConfig, domain: DomainKey
         return { files, uploadedFiles, uploadedBytes };
     }
 
-    await runWithConcurrency(tasks, FILE_CONCURRENCY, async ({ item, blob }) => {
+    // 媒体文件上传采用单并发（串行），彻底避免网盘 WebDAV 同一目录写入锁竞争（423 Locked）
+    await runWithConcurrency(tasks, 1, async ({ item, blob }) => {
         await uploadWebdavFile(config, item.path, blob, item.mimeType);
         uploadedFiles += 1;
         uploadedBytes += blob.size;

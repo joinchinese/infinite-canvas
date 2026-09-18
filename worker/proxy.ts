@@ -83,7 +83,6 @@ export function readProxyTarget(url: URL): string {
 const SKIP_REQUEST_HEADERS = new Set([
     "host",
     "connection",
-    "content-length",
     "accept-encoding",
     "origin",
     "referer",

@@ -34,12 +34,20 @@ export async function uploadWebdavFile(config: WebdavSyncConfig, path: string, f
     if (!file.size) throw new Error(webdavText("emptyUpload"));
     await ensureWebdavDirectory(config);
     await ensureWebdavSubdirectory(config, path);
-    const response = await webdavFetch(config, path, {
-        method: "PUT",
-        headers: { "Content-Type": contentType },
-        body: file,
-    });
-    if (!response.ok) await throwWebdavError(response, webdavText("uploadFailed"));
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        response = await webdavFetch(config, path, {
+            method: "PUT",
+            headers: { "Content-Type": contentType },
+            body: file,
+        });
+        if (response.status !== 423) {
+            break;
+        }
+        // 如果遇到 423 Locked，等待 1.5 秒后自动重试
+        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+    if (!response || !response.ok) await throwWebdavError(response!, webdavText("uploadFailed"));
 }
 
 async function ensureWebdavDirectory(config: WebdavSyncConfig) {
@@ -74,7 +82,9 @@ async function webdavDirectoryExists(config: WebdavSyncConfig, path: string) {
 
 async function webdavFetch(config: WebdavSyncConfig, path: string, init: RequestInit) {
     const headers = new Headers(init.headers);
-    if (config.username || config.password) headers.set("Authorization", `Basic ${encodeBasicAuth(`${config.username}:${config.password}`)}`);
+    const username = (config.username || "").trim();
+    const password = (config.password || "").trim();
+    if (username || password) headers.set("Authorization", `Basic ${encodeBasicAuth(`${username}:${password}`)}`);
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), WEBDAV_REQUEST_TIMEOUT_MS);
     try {
