@@ -38,10 +38,10 @@ import dayjs from "dayjs";
 import { CircleCheck, CloudUpload, LoaderCircle, TriangleAlert, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { applySharedConfig, fetchSharedConfig, publishSharedConfig } from "@/services/api/shared-config";
+import { applySharedConfig, fetchSharedConfig, isSharedApiKeyPlaceholder, publishSharedConfig, stripVolatileWebdavFields } from "@/services/api/shared-config";
 import { noteSharedConfigPublished, useAccessStore, useIsAdmin } from "@/stores/use-access-store";
 import { useConfigStore } from "@/stores/use-config-store";
-import { markSyncError, markSyncPending, markSynced, markSyncing, useSharedConfigSyncStore, type SharedConfigSyncPhase } from "@/stores/use-shared-config-sync-store";
+import { markSyncError, markSyncPending, markSyncSkipped, markSynced, markSyncing, useSharedConfigSyncStore, type SharedConfigSyncPhase } from "@/stores/use-shared-config-sync-store";
 
 /** 管理员侧的防抖窗口。拖滑块、连续打字都会落进同一个窗口，只发一次。 */
 const ADMIN_DEBOUNCE_MS = 1200;
@@ -80,6 +80,16 @@ function AdminAutoPublish() {
             return;
         }
 
+        // 护栏 2（真正落地）：本机一个真实 Key 都没有时，照常发布会把线上配置覆盖成
+        // "空渠道/占位符渠道"，并且 DELETE 掉所有不在本机渠道清单里的密钥——
+        // 这是把全员真实 Key 一起清掉的破坏性写入。这种情况拦下不发，界面给出原因。
+        // 需要"我确实要清空所有渠道"时，走成员管理页的手动发布按钮（唯一绕过护栏的入口）。
+        const hasRealKey = latestConfig.channels.some((channel) => channel.apiKey.trim() && !isSharedApiKeyPlaceholder(channel.apiKey));
+        if (!hasRealKey) {
+            markSyncSkipped("no-credentials");
+            return; // 刻意不更新 baseline：补上 Key 后的下一次改动会自动重新尝试发布。
+        }
+
         flushing.current = true;
         markSyncing();
         try {
@@ -101,7 +111,9 @@ function AdminAutoPublish() {
     }, []);
 
     useEffect(() => {
-        const snapshot = JSON.stringify({ config, webdav });
+        // 快照必须剥离 lastSyncedAt（stripVolatileWebdavFields）：静默备份引擎每次成功
+        // 都会写这个字段，若参与比较，管理员每备份一次就会触发一次全员配置发布。
+        const snapshot = JSON.stringify({ config, webdav: stripVolatileWebdavFields(webdav) });
 
         // 护栏 1：挂载时的第一份配置只作基线，不推送。
         if (baseline.current === null) {
@@ -136,7 +148,9 @@ function AdminAutoPublish() {
             applySharedConfig(shared.config);
             noteSharedConfigPublished(shared.updatedAt, shared.missingSecrets);
             knownUpdatedAt.current = shared.updatedAt;
-            baseline.current = JSON.stringify(useConfigStore.getState().config);
+            // baseline 必须与 effect 里的快照**同一形状**（{config, webdav}，且剥离易变字段）。
+            // 旧实现只序列化了 config，形状不一致导致这次应用后必然多发布一次。
+            baseline.current = JSON.stringify({ config: useConfigStore.getState().config, webdav: stripVolatileWebdavFields(useConfigStore.getState().webdav) });
             markSynced(shared.updatedAt);
             message.info(t("access.sync.memberUpdated"));
         } catch {

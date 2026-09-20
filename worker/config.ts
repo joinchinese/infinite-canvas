@@ -143,27 +143,34 @@ async function readSharedConfig(env: Env, user: { id: string; username: string; 
         .first<{ value_json: string; updated_at: number }>();
 
     const rawWebdav = webdavRow ? (parseJson(webdavRow.value_json) as Record<string, unknown> | null) : null;
+    // `lastSyncedAt` 是"本机上次备份时间"这种纯个人状态，绝不能进共享配置：
+    // 它会跟着发布流动，把成员本地的备份时间覆盖成管理员的（并造成无意义的频繁发布）。
+    // 这里在读取侧剥离，顺便治愈旧版本已经存进库里的脏数据。
+    if (rawWebdav) delete rawWebdav.lastSyncedAt;
     let webdav: Record<string, unknown> | null = null;
     if (rawWebdav && rawWebdav.sharedEnabled !== false && rawWebdav.url) {
+        // 隔离段的计算对管理员和成员一视同仁：所有人（含管理员）都落在
+        // `<根目录>/users/<用户名>/`，根目录只留目录骨架，不再散落各人的业务文件夹。
+        // `isolateMembers === false` 是显式的"全员共用根目录"危险选项。
+        const baseDir = typeof rawWebdav.directory === "string" ? rawWebdav.directory.trim().replace(/^\/+|\/+$/g, "") : "infinite-canvas";
+        const isolate = rawWebdav.isolateMembers !== false;
+        const segment = normalizeMemberSegment(user.username || user.id || (isAdmin ? "admin" : "member"));
+        const memberScope = isolate ? `users/${segment}` : "";
         if (isAdmin) {
-            webdav = rawWebdav;
+            // 管理员：连接信息原样读回（本机可编辑），只带上服务端算出的隔离段。
+            // managed 不打标——管理员自己的配置保持可编辑。
+            webdav = { ...rawWebdav, memberScope };
         } else {
             // 普通成员：专属目录物理隔离。
             //
             // 目录形状是 `<管理员根目录>/users/<用户名>`。这里**在服务端拼好**而不是只下发
             // `memberScope` 让前端自己拼，理由是安全性：成员无法通过改本地配置把自己写回
             // 共享根目录（前端那份 `directory` 是下载覆盖的，改了下一次拉取又会被纠正）。
-            //
-            // `isolateMembers === false` 是管理员显式选择"全员共用一个目录"，属于危险选项，
-            // 只用于单人使用或确实想要一份合并快照的场景。
-            const baseDir = typeof rawWebdav.directory === "string" ? rawWebdav.directory.trim().replace(/^\/+|\/+$/g, "") : "infinite-canvas";
-            const isolate = rawWebdav.isolateMembers !== false;
             if (isolate) {
-                const userSegment = normalizeMemberSegment(user.username || user.id || "member");
                 webdav = {
                     ...rawWebdav,
-                    directory: `${baseDir}/users/${userSegment}`,
-                    memberScope: `users/${userSegment}`,
+                    directory: `${baseDir}/${memberScope}`,
+                    memberScope,
                     managed: true,
                 };
             } else {
@@ -255,11 +262,13 @@ async function writeSharedConfig(request: Request, env: Env, actorId: string): P
     // 管理员发布的 WebDAV 统一配置持久化
     if (body?.webdav !== undefined) {
         if (body.webdav && typeof body.webdav === "object" && !Array.isArray(body.webdav)) {
+            // `lastSyncedAt` 不入库（个人状态，见 readSharedConfig 的注释）。
+            const { lastSyncedAt: _ignored, ...webdavToStore } = body.webdav;
             statements.push(
                 env.DB.prepare(
                     `INSERT INTO app_config (config_key, value_json, updated_at, updated_by) VALUES (?1, ?2, ?3, ?4)
                      ON CONFLICT(config_key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
-                ).bind(SHARED_WEBDAV_CONFIG_KEY, JSON.stringify(body.webdav), now, actorId),
+                ).bind(SHARED_WEBDAV_CONFIG_KEY, JSON.stringify(webdavToStore), now, actorId),
             );
         } else if (body.webdav === null) {
             statements.push(

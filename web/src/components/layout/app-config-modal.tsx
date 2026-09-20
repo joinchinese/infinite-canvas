@@ -365,7 +365,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                                 <Form.Item label="下发给所有成员" extra="开启后，成员登录即自动使用这份 WebDAV 配置，把各自的画布与资产备份到同一台服务器" className="mb-0">
                                                     <Switch checked={webdav.sharedEnabled !== false} onChange={(checked) => updateWebdavConfig("sharedEnabled", checked)} />
                                                 </Form.Item>
-                                                <Form.Item label="成员独立子目录" extra="开启后每位成员的数据写入「根目录/users/用户名/」，互不覆盖；关闭则全员共用一个目录（会互相覆盖，仅单人使用或需合并快照时关闭）" className="mb-0 md:col-span-2">
+                                                <Form.Item label="独立子目录（含管理员）" extra="开启后管理员与每位成员的数据分别写入「根目录/users/用户名/」，互不覆盖、根目录保持整洁；关闭则所有人共用一个目录（会互相覆盖，仅单人使用或需合并快照时关闭）" className="mb-0 md:col-span-2">
                                                     <Switch checked={webdav.isolateMembers !== false} disabled={webdav.sharedEnabled === false} onChange={(checked) => updateWebdavConfig("isolateMembers", checked)} />
                                                 </Form.Item>
                                             </>

@@ -572,8 +572,10 @@ async function main() {
     expectStatus("管理员可发布 WebDAV 纳管配置", webdavPublished, 200);
 
     const adminWebdav = await configAdmin.get("/api/config");
-    record("管理员读回自己的 WebDAV 配置（目录原样，不追加成员段）", adminWebdav.payload?.webdav?.directory === "infinite-canvas", String(adminWebdav.payload?.webdav?.directory));
-    record("管理员的 WebDAV 配置不打 managed 标记", !adminWebdav.payload?.webdav?.managed);
+    record("管理员读回自己的 WebDAV 配置（directory 保持根目录原样）", adminWebdav.payload?.webdav?.directory === "infinite-canvas", String(adminWebdav.payload?.webdav?.directory));
+    record("管理员同样拿到隔离段（数据也落 users/<用户名>，根目录保持整洁）", adminWebdav.payload?.webdav?.memberScope === "users/gate-admin", String(adminWebdav.payload?.webdav?.memberScope));
+    record("管理员的 WebDAV 配置不打 managed 标记（保持可编辑）", !adminWebdav.payload?.webdav?.managed);
+    record("lastSyncedAt 不入库（纯个人状态，不随发布流动）", adminWebdav.payload?.webdav?.lastSyncedAt === undefined, JSON.stringify(adminWebdav.payload?.webdav?.lastSyncedAt));
 
     const memberWebdav = await configMember.get("/api/config");
     record("普通成员能读到下发的 WebDAV 配置", Boolean(memberWebdav.payload?.webdav?.url), String(memberWebdav.payload?.webdav?.url));
@@ -595,6 +597,8 @@ async function main() {
     const memberNoIsolate = await configMember.get("/api/config");
     record("关闭隔离后成员落到共享根目录", memberNoIsolate.payload?.webdav?.directory === "infinite-canvas", String(memberNoIsolate.payload?.webdav?.directory));
     record("关闭隔离后 memberScope 为空（不重复拼接）", memberNoIsolate.payload?.webdav?.memberScope === "", JSON.stringify(memberNoIsolate.payload?.webdav?.memberScope));
+    const adminNoIsolate = await configAdmin.get("/api/config");
+    record("关闭隔离后管理员的隔离段同样清空", adminNoIsolate.payload?.webdav?.memberScope === "", JSON.stringify(adminNoIsolate.payload?.webdav?.memberScope));
 
     // webdav 传 null 表示撤销纳管，成员应回落到各自本地配置。
     await configAdmin.request("PUT", "/api/config", { config: SHARED_CONFIG, webdav: null });

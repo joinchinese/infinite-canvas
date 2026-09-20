@@ -110,7 +110,9 @@ async function webdavDirectoryExists(config: WebdavSyncConfig, path: string) {
 export async function listWebdavDirectoryFiles(config: WebdavSyncConfig, path: string): Promise<Map<string, number>> {
     const fileSizes = new Map<string, number>();
     try {
-        const response = await webdavFetch(config, path, { method: "PROPFIND", headers: { Depth: "1" } });
+        // 与其他出口一致必须过 scoped()：否则一旦调用方传入未拼隔离段的配置，
+        // PROPFIND 会探测到共享根目录（别人的）文件，误判"已存在"而跳过上传。
+        const response = await webdavFetch(scoped(config), path, { method: "PROPFIND", headers: { Depth: "1" } });
         if (!response.ok && response.status !== 207) return fileSizes;
         const xml = await response.text();
         const responseBlocks = xml.split(/<\/[^:]*:response>/i);

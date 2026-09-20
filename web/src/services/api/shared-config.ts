@@ -73,7 +73,19 @@ export async function fetchSharedConfig(): Promise<SharedConfigResponse> {
 
 /** 发布当前配置（仅管理员）。请求体里带真实 Key，响应里绝不回显。 */
 export function publishSharedConfig(config: AiConfig, webdav?: WebdavSyncConfig): Promise<PublishSharedConfigResponse> {
-    return requestJson<PublishSharedConfigResponse>("/api/config", { method: "PUT", body: JSON.stringify({ config, webdav }) });
+    return requestJson<PublishSharedConfigResponse>("/api/config", { method: "PUT", body: JSON.stringify({ config, webdav: webdav ? stripVolatileWebdavFields(webdav) : webdav }) });
+}
+
+/**
+ * 剥离不该进共享配置的「本机易变字段」。
+ *
+ * `lastSyncedAt`（上次备份时间）是纯个人状态：如果跟着发布流出去，
+ * 管理员每次静默备份都会触发一次全员配置发布（成员被无意义地弹通知），
+ * 成员本地的备份时间还会被管理员的时间覆盖。快照比较与发布载荷都必须先剥掉它。
+ */
+export function stripVolatileWebdavFields(webdav: WebdavSyncConfig): Omit<WebdavSyncConfig, "lastSyncedAt"> {
+    const { lastSyncedAt: _ignored, ...rest } = webdav;
+    return rest;
 }
 
 /** 判断一个 apiKey 是否为占位符（via-proxy 或 via-proxy:channelId） */
@@ -140,21 +152,32 @@ export function applySharedConfig(shared: AiConfig, sharedWebdav?: WebdavSyncCon
     // | 普通成员 | **强制**采用管理员下发的地址/凭据/成员专属目录。本机那份只保留界面偏好
     // |          | （`syncMode` / `skipExistingFiles` / `autoSync`），因为上传快慢和是否静默
     // |          | 是各人网络环境相关的，不该由管理员一刀切。 |
-    // | 管理员   | 本机**没配过**才从云端填补（换设备场景）；本机配过就以本机为准， |
-    // |          | 避免管理员正在编辑的地址被轮询拉回旧值。 |
+    // | 管理员   | 本机**没配过**才从云端填补（换设备场景）；本机配过则以本机为准，
+    // |          | 但 `memberScope` 例外——隔离段由服务端按用户名算，必须跟随。 |
     //
     // 成员侧的 `directory` / `memberScope` 必须整体覆盖：那是服务端按用户名算出来的隔离路径，
     // 如果保留本机的旧值，成员就可能在升级后继续往共享根目录写，从而覆盖别人的数据。
+    const currentWebdav = useConfigStore.getState().webdav;
     if (sharedWebdav && sharedWebdav.url) {
-        const currentWebdav = useConfigStore.getState().webdav;
-        const currentUser = useAccessStore.getState().user;
-        const isAdmin = currentUser?.role === "admin";
+        const isAdmin = useAccessStore.getState().user?.role === "admin";
         if (isAdmin) {
             if (!currentWebdav?.url?.trim()) {
                 useConfigStore.setState({ webdav: { ...defaultWebdavSyncConfig, ...sharedWebdav } });
+            } else {
+                // 管理员本机已配置：连接信息保持本机优先（他可能正在编辑），
+                // 但「隔离段」由服务端按用户名实时计算（决定他的数据落 users/<admin> 还是根目录），
+                // 必须跟随服务端，否则开关「独立子目录」后管理员自己不会迁移。
+                useConfigStore.setState({
+                    webdav: {
+                        ...currentWebdav,
+                        memberScope: typeof sharedWebdav.memberScope === "string" ? sharedWebdav.memberScope : "",
+                    },
+                });
             }
         } else {
             // 本机网络/习惯相关的开关：服务端不下发这些字段，沿用本地。
+            // 注意必须**后铺**在下发值之上——旧实现 localPrefs 在前、sharedWebdav 在后，
+            // 云端若带了 lastSyncedAt 会把成员自己的备份时间覆盖成管理员的。
             const localPrefs = {
                 syncMode: currentWebdav?.syncMode ?? defaultWebdavSyncConfig.syncMode,
                 skipExistingFiles: currentWebdav?.skipExistingFiles ?? defaultWebdavSyncConfig.skipExistingFiles,
@@ -165,12 +188,18 @@ export function applySharedConfig(shared: AiConfig, sharedWebdav?: WebdavSyncCon
             useConfigStore.setState({
                 webdav: {
                     ...defaultWebdavSyncConfig,
-                    ...localPrefs,
                     ...sharedWebdav,
+                    ...localPrefs,
                     managed: true,
                 },
             });
         }
+    } else if (useAccessStore.getState().user?.role !== "admin" && (currentWebdav?.url?.trim() || currentWebdav?.managed)) {
+        // 管理员撤销了统一纳管（或还没配置）：清掉成员本机残留的托管配置，
+        // 引擎读到空 url 自然停止，界面回落到「未启用云端备份」。
+        // 旧实现这里直接跳过，导致撤销后成员仍在用旧配置静默备份。
+        // 只在确有残留时重置，避免每轮轮询都白写一次 store。
+        useConfigStore.setState({ webdav: { ...defaultWebdavSyncConfig } });
     }
 
     // 注意时序：zustand 的 persist 在 store 创建时（模块加载阶段）就已从 localStorage 恢复完毕，

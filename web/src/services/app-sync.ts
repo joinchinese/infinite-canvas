@@ -185,11 +185,17 @@ async function syncDomain<T>(config: WebdavSyncConfig, onProgress: AppSyncProgre
         const remoteManifest = await readDomainManifest(config, options.key, options.emptyData);
         emitProgress(onProgress, { domain: options.key, label: options.label, stage: "读取本地数据", status: "active" });
         const localData = await options.localData();
-        const mergedData = remoteManifest ? options.mergeData(localData, remoteManifest.data) : localData;
+        let mergedData = remoteManifest ? options.mergeData(localData, remoteManifest.data) : localData;
 
         if (remoteManifest) {
             emitProgress(onProgress, { domain: options.key, label: options.label, stage: "下载缺失媒体", status: "active" });
             await downloadMissingFiles(config, options.key, mergedData, remoteManifest.files, onProgress);
+            // 下载大媒体可能耗时数分钟，期间用户完全可能又生成了新内容。
+            // applyData 是**全量替换**（replaceProjects/replaceAssets/replaceStoredLogs），
+            // 若直接用同步开始时的旧快照替换，会把中途新增的项目/资产/记录抹掉且无法自愈。
+            // 所以 apply 前重读一次本地、与远端重新合并——窗口从"整个同步时长"缩小到几毫秒。
+            const freshLocal = await options.localData();
+            mergedData = options.mergeData(freshLocal, remoteManifest.data);
             emitProgress(onProgress, { domain: options.key, label: options.label, stage: "写入本地合并结果", status: "active" });
             await options.applyData?.(mergedData);
         }
