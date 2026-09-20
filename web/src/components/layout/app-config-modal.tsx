@@ -19,7 +19,7 @@ import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webd
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { useAutoSyncStore } from "@/stores/use-auto-sync-store";
 import { useCanOpenConfig } from "@/stores/use-access-store";
-import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, resolveWebdavSyncDirectory, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -324,7 +324,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                                     {/* 成员侧：连接信息由管理员下发，本地不可改（改了下次拉取也会被纠正） */}
                                     {isManagedWebdav ? (
                                         <div className="mb-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
-                                            {t("config.webdav.managedNotice", { directory: resolveWebdavSyncDirectory(webdav) || "(根目录)" })}
+                                            {t("config.webdav.managedNotice")}
                                         </div>
                                     ) : null}
                                     <div className="grid gap-4 md:grid-cols-2">

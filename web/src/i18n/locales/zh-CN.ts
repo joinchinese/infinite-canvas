@@ -583,7 +583,7 @@ export default {
             url: "WebDAV 地址",
             directory: "远程目录",
             directoryDescription: "会在该目录下分业务目录保存，每个目录包含 {{manifest}} 和 files/",
-            managedNotice: "该配置由管理员统一管理，你的数据会备份到 {{directory}}。为避免互相覆盖，地址与目录不可修改；上传模式、断点秒传与静默备份仍可按你的网络情况自行调整。",
+            managedNotice: "该配置由管理员统一管理，你的数据会自动备份到云端。为避免互相覆盖，地址与目录不可修改；上传模式、断点秒传与静默备份仍可按你的网络情况自行调整。",
             username: "用户名",
             password: "密码 / 应用密码",
             test: "测试连接",

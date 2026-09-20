@@ -42,7 +42,7 @@
 
 import { syncAppDataToWebdav, type AppSyncProgressEvent } from "@/services/app-sync";
 import { useAccessStore } from "@/stores/use-access-store";
-import { resolveWebdavSyncDirectory, useConfigStore, type WebdavSyncConfig } from "@/stores/use-config-store";
+import { useConfigStore, type WebdavSyncConfig } from "@/stores/use-config-store";
 import { isGenerationSettled, IDLE_SETTLE_MS, useGenerationActivityStore } from "@/stores/use-generation-activity-store";
 
 /** 定时巡检间隔。 */
@@ -219,11 +219,4 @@ export function resetAutoSyncEngine(): void {
 /** 给界面读的只读快照：是否正在同步。 */
 export function isAutoSyncRunning(): boolean {
     return running;
-}
-
-/** 成员专属目录的可读描述，用于界面提示"你的数据存在哪"。 */
-export function describeSyncTarget(): string {
-    const config = useConfigStore.getState().webdav;
-    const directory = resolveWebdavSyncDirectory(config);
-    return directory || "(根目录)";
 }

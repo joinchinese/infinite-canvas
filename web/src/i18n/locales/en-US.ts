@@ -583,7 +583,7 @@ export default {
             url: "WebDAV URL",
             directory: "Remote directory",
             directoryDescription: "Business directories are created here, each containing {{manifest}} and files/",
-            managedNotice: "This configuration is managed by your administrator; your data is backed up to {{directory}}. The URL and directory are read-only so members cannot overwrite each other. Transfer mode, incremental skip and silent backup remain yours to adjust.",
+            managedNotice: "This configuration is managed by your administrator; your data is backed up to the cloud automatically. The URL and directory are read-only so members cannot overwrite each other. Transfer mode, incremental skip and silent backup remain yours to adjust.",
             username: "Username",
             password: "Password / app password",
             test: "Test connection",

@@ -9,14 +9,14 @@
 import { useEffect, useState } from "react";
 import { Modal, Tooltip } from "antd";
 import dayjs from "dayjs";
-import { CloudOff, CloudUpload, HardDrive, LoaderCircle, RefreshCw, TriangleAlert, type LucideIcon } from "lucide-react";
+import { CloudOff, CloudUpload, LoaderCircle, RefreshCw, TriangleAlert, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ReactNode } from "react";
 
 import { runAutoSync, startAutoSyncEngine, subscribeAutoSync } from "@/services/auto-sync-engine";
 import { formatBytes } from "@/lib/image-utils";
 import { useAutoSyncStore, type AutoSyncPhase } from "@/stores/use-auto-sync-store";
-import { resolveWebdavSyncDirectory, useConfigStore } from "@/stores/use-config-store";
+import { useConfigStore } from "@/stores/use-config-store";
 
 /** 引擎挂载。渲染 `null`，纯粹是生命周期宿主。 */
 export function AutoSyncEngine() {
@@ -69,7 +69,6 @@ export function AutoSyncStatusLine() {
     const stage = useAutoSyncStore((state) => state.stage);
     const url = useConfigStore((state) => state.webdav.url);
     const autoSync = useConfigStore((state) => state.webdav.autoSync);
-    const directory = useConfigStore((state) => state.webdav.directory);
     const [retrying, setRetrying] = useState(false);
     const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -130,7 +129,7 @@ export function AutoSyncStatusLine() {
                 title={
                     phase === "syncing"
                         ? t("access.autoSync.syncingDetail", { stage: stage || t("access.autoSync.syncing") })
-                        : t("access.autoSync.detail", { directory: directory || "(根目录)" })
+                        : t("access.autoSync.detail")
                 }
             >
                 <button
@@ -165,7 +164,6 @@ function AutoSyncDetailModal({ open, onClose }: { open: boolean; onClose: () => 
     const [retrying, setRetrying] = useState(false);
 
     const configured = Boolean(webdav.url?.trim());
-    const directory = resolveWebdavSyncDirectory(webdav);
     const view = PHASE_VIEW[phase];
     const Icon = view.icon;
     const statusText = t(view.labelKey, { time: lastSyncedAt ? dayjs(lastSyncedAt).format("HH:mm:ss") : "" });
@@ -194,9 +192,6 @@ function AutoSyncDetailModal({ open, onClose }: { open: boolean; onClose: () => 
             }
         >
             <div className="space-y-3 pt-1 text-sm">
-                <DetailRow label={t("access.autoSync.detailPanel.target")} icon={<HardDrive className="size-3.5" />}>
-                    <code className="break-all rounded bg-stone-100 px-1.5 py-0.5 text-xs text-stone-700 dark:bg-stone-800 dark:text-stone-200">{configured ? directory || "/" : t("access.autoSync.notConfigured")}</code>
-                </DetailRow>
                 <DetailRow label={t("access.autoSync.detailPanel.status")}>
                     <span className={`inline-flex items-center gap-1.5 ${view.tone}`}>
                         <Icon className={`size-3.5 ${phase === "syncing" ? "animate-spin" : ""}`} />
@@ -217,7 +212,7 @@ function AutoSyncDetailModal({ open, onClose }: { open: boolean; onClose: () => 
                 {phase === "failed" && lastError ? (
                     <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">{t("access.autoSync.failedDetail", { message: lastError })}</div>
                 ) : null}
-                <p className="text-xs text-stone-500">{t("access.autoSync.detail", { directory: directory || t("access.autoSync.detailPanel.target") })}</p>
+                <p className="text-xs text-stone-500">{t("access.autoSync.detail")}</p>
                 {configured ? (
                     <div className="flex justify-end">
                         <button
