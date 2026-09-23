@@ -55,7 +55,10 @@ export function ModelScriptEditor({ open, capability, modelName, value, onSave, 
             wrapClassName="[&_.ant-modal]:!inset-0 [&_.ant-modal]:!top-0 [&_.ant-modal]:!m-0 [&_.ant-modal]:!max-w-none [&_.ant-modal]:!h-dvh [&_.ant-modal]:!w-full [&_.ant-modal]:!p-0 [&_.ant-modal-container]:!h-dvh [&_.ant-modal-container]:!p-0 [&_.ant-modal-content]:!h-dvh [&_.ant-modal-content]:!max-h-dvh [&_.ant-modal-content]:!rounded-none [&_.ant-modal-content]:!overflow-hidden [&_.ant-modal-body]:!h-full [&_.ant-modal-body]:!max-h-full [&_.ant-modal-body]:!overflow-hidden [&_.ant-modal-body]:!p-0"
             styles={{
                 wrapper: { overflow: "hidden" },
-                content: { height: "100dvh", maxHeight: "100dvh", margin: 0, padding: 0, borderRadius: 0, overflow: "hidden" },
+                // antd 6 的 Modal `styles` 只接受 root/header/body/footer/container/title/wrapper/mask/close，
+                // 没有 `content`（旧版语义键已移除）。这里原先写了 `content`，被 TS 判为多余属性。
+                // 它想设的全屏样式已由上面的 `wrapClassName`（`[&_.ant-modal-content]:...`）用 class 实现，
+                // 属重复设置，故直接删除；渲染结果不变。
                 body: { height: "100dvh", maxHeight: "100dvh", padding: 0, overflow: "hidden" },
             }}
             style={{ top: 0, margin: 0, paddingBottom: 0, maxWidth: "100vw" }}

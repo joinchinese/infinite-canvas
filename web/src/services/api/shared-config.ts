@@ -149,11 +149,21 @@ export function applySharedConfig(shared: AiConfig, sharedWebdav?: WebdavSyncCon
     //
     // | 角色 | 行为 |
     // |---|---|
-    // | 普通成员 | **强制**采用管理员下发的地址/凭据/成员专属目录。本机那份只保留界面偏好
-    // |          | （`syncMode` / `skipExistingFiles` / `autoSync`），因为上传快慢和是否静默
-    // |          | 是各人网络环境相关的，不该由管理员一刀切。 |
+    // | 普通成员 | **强制**采用管理员下发的全部字段：地址/凭据/成员专属目录，
+    // |          | 以及 `syncMode` / `skipExistingFiles` / `autoSync` 三个传输行为开关。
+    // |          | 只保留 `lastSyncedAt`（本机备份时间，纯个人状态）。 |
     // | 管理员   | 本机**没配过**才从云端填补（换设备场景）；本机配过则以本机为准，
     // |          | 但 `memberScope` 例外——隔离段由服务端按用户名算，必须跟随。 |
+    //
+    // 【为什么传输开关也要强制下发，而不是"沿用成员本机值"】
+    // 原实现把 `syncMode` / `skipExistingFiles` / `autoSync` 放进了 `localPrefs` 白名单，
+    // 理由是"上传快慢、是否静默跟各人网络环境相关"。这个理由在**成员能自己改**的前提下成立，
+    // 但实际不成立：普通成员打不开配置面板（`useCanOpenConfig()` 只对 admin / degraded 为真，
+    // 见 `use-access-store.ts`），没有修改入口。于是"沿用本机值"等价于"沿用出厂默认值"，
+    // 结果是管理员选「串行」而成员静默跑「并发」——行为不一致且没有任何界面提示。
+    //
+    // 因此统一为强制下发。**判据：UI 上只有管理员能改的配置项，一律不进本机白名单。**
+    // 以后新增成员不可见的开关时照此办理，不要再往 localPrefs 里加。
     //
     // 成员侧的 `directory` / `memberScope` 必须整体覆盖：那是服务端按用户名算出来的隔离路径，
     // 如果保留本机的旧值，成员就可能在升级后继续往共享根目录写，从而覆盖别人的数据。
@@ -175,21 +185,20 @@ export function applySharedConfig(shared: AiConfig, sharedWebdav?: WebdavSyncCon
                 });
             }
         } else {
-            // 本机网络/习惯相关的开关：服务端不下发这些字段，沿用本地。
-            // 注意必须**后铺**在下发值之上——旧实现 localPrefs 在前、sharedWebdav 在后，
-            // 云端若带了 lastSyncedAt 会把成员自己的备份时间覆盖成管理员的。
-            const localPrefs = {
-                syncMode: currentWebdav?.syncMode ?? defaultWebdavSyncConfig.syncMode,
-                skipExistingFiles: currentWebdav?.skipExistingFiles ?? defaultWebdavSyncConfig.skipExistingFiles,
-                autoSync: currentWebdav?.autoSync ?? defaultWebdavSyncConfig.autoSync,
-                lastSyncedAt: currentWebdav?.lastSyncedAt ?? "",
-            };
-            // 连接信息与落盘路径（含专属隔离目录）一律以服务端为准，本机旧值不得残留。
+            // 成员侧：连接信息、落盘路径、以及**所有传输行为开关**一律以服务端为准。
+            //
+            // 【强制下发策略】普通成员打不开配置面板（`useCanOpenConfig` 只对 admin 为真），
+            // 所以这些开关对成员而言**没有修改入口**——所谓"沿用本机值"实际就是沿用出厂默认值，
+            // 只会造成"管理员选了串行、成员却在跑并发"这种查不出来的不一致。
+            // 判据：**UI 上只有管理员能改的项，就不许进本机白名单。**
+            //
+            // 唯一保留的本机字段是 `lastSyncedAt`：它是"本机上次备份成功时间"，
+            // 纯个人状态，必须留在本机（服务端读取侧也会主动剥掉它）。
             useConfigStore.setState({
                 webdav: {
                     ...defaultWebdavSyncConfig,
                     ...sharedWebdav,
-                    ...localPrefs,
+                    lastSyncedAt: currentWebdav?.lastSyncedAt ?? "",
                     managed: true,
                 },
             });

@@ -2,7 +2,7 @@
 
 > **基线**：上游提交 `e856c878e0a34651bb828e28f0af20d71016a7d4`（2026-09-20 拉取时上游领先 0 个提交）
 > **本 fork 领先上游**：31 个功能提交（不含本台账自身的提交；`git rev-list --count <基线>..HEAD` 可随时复核）
-> **总量**：新增 37 个文件 · 修改 24 个上游文件 · 删除 0 · 重命名 0
+> **总量**：新增 37 个文件 · 修改 25 个上游文件 · 删除 0 · 重命名 0
 
 这份文件是**唯一权威的改动台账**。之前散落在 `infinite-canvas-门禁实施方案.md`（只覆盖门禁阶段）
 与工作记忆里的缝合点清单（缺 10 项）都不完整，以本文件为准。
@@ -26,6 +26,35 @@ git merge upstream/main      # 冲突只会出现在第三节列出的文件里
 cd web && npm run build      # 本地验证
 git push origin main         # 推送后由 Cloudflare Workers Builds 自动构建
 ```
+
+---
+
+## 一·B、配置字段归属总则（强制策略，新增开关时照此办理）
+
+**判据一句话：UI 上只有管理员能改的配置项，一律由管理员强制下发给成员，不许"沿用成员本机值"。**
+
+依据：普通成员**打不开配置面板**——`useCanOpenConfig()`（`web/src/stores/use-access-store.ts`）
+只对 `admin` 和 `degraded` 状态返回 `true`，成员点齿轮看到的是"仅管理员可配置"说明页。
+
+因此对成员来说，任何"本机值"都等于**出厂默认值**，不是他本人的选择。把它当作偏好保留，
+只会产生两种后果：管理员配的与成员实际跑的不一致；且这种不一致在界面上**没有任何提示**，
+排查时极难发现。
+
+落地要求：在 `web/src/services/api/shared-config.ts` 的 `applySharedConfig()` 成员分支里，
+非管理员可改字段**不得**出现在本机覆盖白名单中。当前该白名单**只保留 `lastSyncedAt`**
+（"本机上次备份成功时间"，纯个人状态，服务端读取侧也会主动剥掉）。
+
+已按此原则纠正的历史问题：`syncMode` / `skipExistingFiles` / `autoSync` 原先被当作
+"成员本机偏好"保留，导致管理员选「顺序同步」时成员仍跑并发。**2026-09-23 改为强制下发。**
+
+| 字段 | 归属 | 谁说了算 |
+|---|---|---|
+| `url` / `username` / `password` | 连接信息 | 管理员（强制） |
+| `directory` / `memberScope` | 落盘路径（按用户名隔离） | 服务端计算（强制） |
+| `sharedEnabled` / `isolateMembers` | 总闸 / 是否分目录 | 管理员（强制） |
+| `syncMode` / `skipExistingFiles` / `autoSync` | 传输行为开关 | 管理员（强制，2026-09-23 起） |
+| `lastSyncedAt` | 本机上次备份时间 | 本机（唯一保留项） |
+| `useProxy` | 是否走本地代理转发 | 本机（管理员侧才可改，成员随管理员值） |
 
 ---
 
@@ -100,13 +129,13 @@ git push origin main         # 推送后由 Cloudflare Workers Builds 自动构�
 
 ---
 
-## 三、修改的上游文件（24 个）——同步上游时只盯这里
+## 三、修改的上游文件（25 个）——同步上游时只盯这里
 
 「冲突风险」= 上游改动同一区域时的合并冲突概率，也是**人工测试的重点区域**。
 
 | 文件 | 改了什么 | 增/删行 | 冲突风险 |
 |---|---|---|---|
-| `web/src/services/app-sync.ts` | 同步调度可切并发/顺序；新增远端物理文件秒传预检；坏清单降级自愈（不再抛错）；apply 前重读本地重新合并 | 131 / 45 | **高** |
+| `web/src/services/app-sync.ts` | 同步调度可切并发/顺序（上传**与下载**并发均跟随 `syncMode`）；新增远端物理文件秒传预检；坏清单降级自愈（不再抛错）；apply 前重读本地重新合并 | 131 / 45 | **高** |
 | `web/src/services/webdav-sync.ts` | 新增 `scoped()` 统一收口隔离段、`listWebdavDirectoryFiles()` 目录探测、上传失败/423 自动重试、单请求超时 120s → 300s | 85 / 18 | **高** |
 | `web/src/components/layout/app-config-modal.tsx` | 弹窗层权限兜底；WebDAV tab 增加并发模式/秒传/静默备份/下发/独立子目录等开关；成员侧连接信息置灰 | 115 / 21 | **高** |
 | `web/src/components/agent/local-agent-panel.tsx` | 接入内置 Agent 驱动 + 本地历史记录 | 219 / 26 | **高** |
@@ -129,6 +158,7 @@ git push origin main         # 推送后由 Cloudflare Workers Builds 自动构�
 | `web/src/pages/canvas/project.tsx` | 10 处生成入口的公共咽喉处登记/注销「正在生成」 | 8 / 1 | 低 |
 | `web/src/components/canvas/canvas-top-bar.tsx` | Agent 状态文案改为中文直书（见第六节偏差 1） | 2 / 2 | 低 |
 | `web/src/components/layout/github-link.tsx` | 隐藏 GitHub 标志（渲染空） | 2 / 18 | 低 |
+| `web/src/components/layout/model-script-editor.tsx` | 删除 Modal `styles.content`（antd 6 已移除该语义键，TS 报多余属性）。样式已由 `wrapClassName` 实现，渲染不变 | 4 / 1 | 低 |
 | `.gitignore` | 忽略 `.dev.vars`、`.wrangler/` | 5 / 1 | 低 |
 
 > 注：`i18n/locales/*.ts` 各只改了 1 行（成员托管提示）。其余门禁/备份文案全部走独立文件

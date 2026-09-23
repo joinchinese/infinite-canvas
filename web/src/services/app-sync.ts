@@ -284,7 +284,11 @@ async function downloadMissingFiles<T>(config: WebdavSyncConfig, domain: DomainK
         return;
     }
     let downloaded = 0;
-    await runWithConcurrency(tasks, FILE_CONCURRENCY, async (remoteFile) => {
+    // 下载并发同样跟随 `syncMode`：串行模式降为单路。
+    // 下载本身不存在网盘写入锁的问题，但跨境网盘带宽有限时，3 路并发会把每路的速度摊薄；
+    // 串行模式的意义是"宁可慢也别把链路打满"，对下载同样成立。
+    const concurrency = config.syncMode === "serial" ? 1 : FILE_CONCURRENCY;
+    await runWithConcurrency(tasks, concurrency, async (remoteFile) => {
         const blob = await downloadWebdavFile(config, remoteFile.path);
         if (!blob) return;
         const typedBlob = blob.type ? blob : blob.slice(0, blob.size, remoteFile.mimeType);
