@@ -1,8 +1,8 @@
 # Fork 改动清单（相对上游 `basketikun/infinite-canvas`）
 
-> **基线**：上游提交 `e856c878e0a34651bb828e28f0af20d71016a7d4`（2026-09-20 拉取时上游领先 0 个提交）
-> **本 fork 领先上游**：31 个功能提交（不含本台账自身的提交；`git rev-list --count <基线>..HEAD` 可随时复核）
-> **总量**：新增 37 个文件 · 修改 25 个上游文件 · 删除 0 · 重命名 0
+> **基线**：上游 `9f2bd9f1b27c45fd1b8f5323072b07243f9e0fac`（= 标签 `v0.20.0` 再加一个 CHANGELOG 提交，2026-10-21 同步）
+> **本 fork 领先上游**：35 个提交（不含本台账自身的提交；`git rev-list --count upstream/main..HEAD` 可随时复核）
+> **总量**：新增 38 个文件 · 修改 25 个上游文件 · 删除 2（上游带入的 pnpm 文件，已剔除）· 重命名 0
 
 这份文件是**唯一权威的改动台账**。之前散落在 `infinite-canvas-门禁实施方案.md`（只覆盖门禁阶段）
 与工作记忆里的缝合点清单（缺 10 项）都不完整，以本文件为准。
@@ -58,7 +58,7 @@ git push origin main         # 推送后由 Cloudflare Workers Builds 自动构�
 
 ---
 
-## 二、新增文件（37 个，完全不参与上游合并）
+## 二、新增文件（38 个，完全不参与上游合并；其中代码文件 37 个 + 本台账）
 
 ### Worker 后端（13）——上游是纯静态 SPA，整个 `worker/` 目录都是新增的
 
@@ -159,10 +159,56 @@ git push origin main         # 推送后由 Cloudflare Workers Builds 自动构�
 | `web/src/components/canvas/canvas-top-bar.tsx` | Agent 状态文案改为中文直书（见第六节偏差 1） | 2 / 2 | 低 |
 | `web/src/components/layout/github-link.tsx` | 隐藏 GitHub 标志（渲染空） | 2 / 18 | 低 |
 | `web/src/components/layout/model-script-editor.tsx` | 删除 Modal `styles.content`（antd 6 已移除该语义键，TS 报多余属性）。样式已由 `wrapClassName` 实现，渲染不变 | 4 / 1 | 低 |
-| `.gitignore` | 忽略 `.dev.vars`、`.wrangler/` | 5 / 1 | 低 |
+| `.gitignore` | 忽略 `.dev.vars`、`.wrangler/`；并忽略上游带入的 `web/pnpm-lock.yaml`、`web/pnpm-workspace.yaml`（见三·B） | 9 / 1 | 低 |
 
 > 注：`i18n/locales/*.ts` 各只改了 1 行（成员托管提示）。其余门禁/备份文案全部走独立文件
 > `i18n/access.ts`，这是刻意的低冲突设计。
+
+---
+
+## 三·B、上游 v0.20.0 升级记录（2026-10-21）
+
+基线从 `e856c87`（v0.19.0）升到 `9f2bd9f`（v0.20.0）。上游这版 40 个提交、30 个文件，
+两边都动过的只有 5 个，**冲突仅 2 处且都在 import 行**，无一行逻辑冲突。
+
+| 冲突文件 | 冲突内容 | 解法 |
+|---|---|---|
+| `canvas-side-panel.tsx` | 图标 import（上游加 `LayoutGrid`/`Rows3`，我们加 `Sparkles`） | 并集 |
+| `app-config-modal.tsx` | antd import（上游加 `Radio`）、我们引入的 access 组件 | 两边都留 |
+
+**自动合并成功但需要留意的 3 个文件**：`i18n/locales/{zh-CN,en-US}.ts`、`pages/canvas/project.tsx`、
+`stores/use-config-store.ts`。已核对：我方「我的提示词」分组、生成活动计数挂钩、WebdavSyncConfig
+扩展字段全部完好。
+
+### 这次合并做的两处主动改动
+
+1. **剔除上游的 pnpm 文件（`web/pnpm-lock.yaml` 9079 行 + `web/pnpm-workspace.yaml`）**
+   构建走 `bun install`，pnpm 锁文件不参与，纯死重量；且 `pnpm-workspace.yaml` 的内容是
+   pnpm 报错文案占位（`esbuild: set this to true or false`），不是合法配置。
+   已在 `.gitignore` 里挡掉，**以后同步上游会自动忽略**。
+2. **修 `lib/agent/builtin-agent-tools.ts` 的画质枚举**
+   原来写死 `["auto","standard","hd"]`。v0.20.0 删掉了 `standard`/`hd` 的别名映射
+   （`services/api/image.ts` 的 `normalizeQuality` 只认 `low/medium/high/xhigh/max`），
+   内置 Agent 传旧值会被静默丢弃。已改为新取值，工具描述同步更新。
+
+### v0.20.0 带来的行为变化（不是 bug，但测的时候要知道）
+
+- **画质与尺寸解耦**：`resolveRequestSize()` 不再吃 `quality`，输出尺寸只由 `config.size` 决定。
+  以前选 `quality=high` 会自动放大到 4k 档，现在不会——要出大图请用配置面板新增的
+  「默认生图分辨率」。Synthorai 不受影响：脚本里的 `fitSize()` 自己兜了「最短边 ≥1920」。
+- **不再静默换模型**：`resolveModelForCapability()` 遇到「模型在渠道里不存在」时不再回退到默认模型，
+  而是保留原值让就绪检查拦住请求并报错。共享配置下发的模型名若与渠道不匹配，成员会直接看到报错
+  （以前是静默换模型，更难排查）。
+- **Gemini `imageSize` 不再按模型名白名单开关**，只要选了分辨率档就会下发。
+- **新增配置项** `nodeRegenerateBehavior`、`autoFocusOnSelect`：`worker/config.ts` 的 `sanitize()`
+  是 `{...raw}` 透传、`applySharedConfig()` 用 `{...defaultConfig, ...shared}` 打底，
+  两处都无需改动即自动下发，符合一·B 的强制下发原则。
+
+### 验证方式
+
+`git worktree` 建临时树试合并 → 解冲突 → `tsc --noEmit` 零错 → `vite build` 成功；
+正式合并后同样跑了一遍，结果一致。上游新增的两个测试文件用 `bun test`，本机无 bun 故未执行，
+不影响构建。
 
 ---
 

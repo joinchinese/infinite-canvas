@@ -19,3 +19,8 @@ web/public/plugins
 # Cloudflare Workers：本地密钥与本地 D1 状态，绝不入库
 .dev.vars
 .wrangler/
+
+# 上游 v0.20.0 起带入 pnpm 锁文件与工作区配置；本项目统一走 bun/npm，不接受
+# （web/pnpm-workspace.yaml 的内容还是 pnpm 报错文案占位，不是合法配置）
+web/pnpm-lock.yaml
+web/pnpm-workspace.yaml

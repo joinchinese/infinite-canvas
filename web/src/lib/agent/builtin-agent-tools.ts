@@ -83,7 +83,7 @@ export const BUILTIN_AGENT_TOOLS = [
                                 height: { type: "number", description: "节点高度（像素）" },
                                 metadata: {
                                     type: "object",
-                                    description: "节点的元数据内容。不同节点类型的关键字段：\n- text 节点：content (string, 文本内容)\n- config 节点：\n  - composerContent (string, 提示词内容)\n  - size (string, 画幅比例，如 '16:9', '9:16', '1:1', '4:3', '3:4', '21:9'。当用户指定比例时必须设置！)\n  - count (number, 单次生成张数，通常 1 到 4。当用户指定张数时必须设置！)\n  - quality (string, 生成质量，如 'auto', 'standard', 'hd')\n  - model (string, 指定的生成模型)",
+                                    description: "节点的元数据内容。不同节点类型的关键字段：\n- text 节点：content (string, 文本内容)\n- config 节点：\n  - composerContent (string, 提示词内容)\n  - size (string, 画幅比例，如 '16:9', '9:16', '1:1', '4:3', '3:4', '21:9'。当用户指定比例时必须设置！)\n  - count (number, 单次生成张数，通常 1 到 4。当用户指定张数时必须设置！)\n  - quality (string, 生成质量，如 'auto', 'low', 'medium', 'high', 'xhigh', 'max')\n  - model (string, 指定的生成模型)",
                                     properties: {
                                         content: { type: "string", description: "文本节点的正文内容" },
                                         composerContent: { type: "string", description: "配置节点的生成提示词" },
@@ -98,7 +98,7 @@ export const BUILTIN_AGENT_TOOLS = [
                                         },
                                         quality: {
                                             type: "string",
-                                            enum: ["auto", "standard", "hd"],
+                                            enum: ["auto", "low", "medium", "high", "xhigh", "max"],
                                             description: "画质质量等级",
                                         },
                                         model: {
